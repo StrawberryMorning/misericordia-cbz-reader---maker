@@ -1,9 +1,30 @@
+export type ComicPageType =
+  | 'FrontCover'
+  | 'InnerCover'
+  | 'Story'
+  | 'DoublePage'
+  | 'Advertisement'
+  | 'BackCover';
+
 export interface ComicInfoMetadata {
   title: string;
   series: string;
   number: string;
   volume: string;
   writer: string;
+  penciller?: string;
+  inker?: string;
+  colorist?: string;
+  letterer?: string;
+  coverArtist?: string;
+  publisher?: string;
+  genre?: string;
+  tags?: string;
+  ageRating?: string;
+  year?: string;
+  month?: string;
+  day?: string;
+  web?: string;
   summary: string;
   manga: 'No' | 'YesAndRightToLeft';
   languageISO: string;
@@ -13,6 +34,8 @@ export interface ComicInfoMetadata {
 export interface PageMetaEntry {
   index: number;
   byteSize: number;
+  type?: ComicPageType;
+  doublePage?: boolean;
 }
 
 function escapeXml(unsafe: string): string {
@@ -22,6 +45,33 @@ function escapeXml(unsafe: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;');
+}
+
+export function createEmptyComicInfo(pageCount = 0): ComicInfoMetadata {
+  return {
+    title: '',
+    series: '',
+    number: '',
+    volume: '',
+    writer: '',
+    penciller: '',
+    inker: '',
+    colorist: '',
+    letterer: '',
+    coverArtist: '',
+    publisher: '',
+    genre: '',
+    tags: '',
+    ageRating: 'Everyone',
+    year: '',
+    month: '',
+    day: '',
+    web: '',
+    summary: '',
+    manga: 'No',
+    languageISO: 'pt-BR',
+    pageCount,
+  };
 }
 
 /**
@@ -36,27 +86,32 @@ export function buildComicInfoXml(
     '<ComicInfo xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">',
   ];
 
-  if (meta.title.trim()) {
-    lines.push(`  <Title>${escapeXml(meta.title.trim())}</Title>`);
-  }
-  if (meta.series.trim()) {
-    lines.push(`  <Series>${escapeXml(meta.series.trim())}</Series>`);
-  }
-  if (meta.number.trim()) {
-    lines.push(`  <Number>${escapeXml(meta.number.trim())}</Number>`);
-  }
-  if (meta.volume.trim()) {
-    lines.push(`  <Volume>${escapeXml(meta.volume.trim())}</Volume>`);
-  }
-  if (meta.writer.trim()) {
-    lines.push(`  <Writer>${escapeXml(meta.writer.trim())}</Writer>`);
-  }
-  if (meta.summary.trim()) {
-    lines.push(`  <Summary>${escapeXml(meta.summary.trim())}</Summary>`);
-  }
-  if (meta.languageISO.trim()) {
-    lines.push(`  <LanguageISO>${escapeXml(meta.languageISO.trim())}</LanguageISO>`);
-  }
+  const pushTag = (tag: string, val?: string) => {
+    if (val && val.trim()) {
+      lines.push(`  <${tag}>${escapeXml(val.trim())}</${tag}>`);
+    }
+  };
+
+  pushTag('Title', meta.title);
+  pushTag('Series', meta.series);
+  pushTag('Number', meta.number);
+  pushTag('Volume', meta.volume);
+  pushTag('Summary', meta.summary);
+  pushTag('Year', meta.year);
+  pushTag('Month', meta.month);
+  pushTag('Day', meta.day);
+  pushTag('Writer', meta.writer);
+  pushTag('Penciller', meta.penciller);
+  pushTag('Inker', meta.inker);
+  pushTag('Colorist', meta.colorist);
+  pushTag('Letterer', meta.letterer);
+  pushTag('CoverArtist', meta.coverArtist);
+  pushTag('Publisher', meta.publisher);
+  pushTag('Genre', meta.genre);
+  pushTag('Tags', meta.tags);
+  pushTag('Web', meta.web);
+  pushTag('AgeRating', meta.ageRating);
+  pushTag('LanguageISO', meta.languageISO);
 
   lines.push(`  <PageCount>${meta.pageCount}</PageCount>`);
   lines.push(`  <Manga>${meta.manga}</Manga>`);
@@ -64,9 +119,14 @@ export function buildComicInfoXml(
   if (pages.length > 0) {
     lines.push('  <Pages>');
     for (const p of pages) {
-      const typeAttr = p.index === 0 ? ' Type="FrontCover"' : '';
+      const resolvedType = p.type ?? (p.index === 0 ? 'FrontCover' : 'Story');
+      const typeAttr = resolvedType ? ` Type="${resolvedType}"` : '';
+      const doubleAttr =
+        p.doublePage || resolvedType === 'DoublePage'
+          ? ' DoublePage="True"'
+          : '';
       lines.push(
-        `    <Page Image="${p.index}" ImageSize="${p.byteSize}"${typeAttr} />`
+        `    <Page Image="${p.index}" ImageSize="${p.byteSize}"${typeAttr}${doubleAttr} />`
       );
     }
     lines.push('  </Pages>');
@@ -95,6 +155,19 @@ export function parseComicInfoXml(xmlText: string): Partial<ComicInfoMetadata> {
       number: getTag('Number'),
       volume: getTag('Volume'),
       writer: getTag('Writer'),
+      penciller: getTag('Penciller'),
+      inker: getTag('Inker'),
+      colorist: getTag('Colorist'),
+      letterer: getTag('Letterer'),
+      coverArtist: getTag('CoverArtist'),
+      publisher: getTag('Publisher'),
+      genre: getTag('Genre'),
+      tags: getTag('Tags'),
+      ageRating: getTag('AgeRating') || 'Everyone',
+      year: getTag('Year'),
+      month: getTag('Month'),
+      day: getTag('Day'),
+      web: getTag('Web'),
       summary: getTag('Summary'),
       languageISO: getTag('LanguageISO') || 'pt-BR',
       manga:

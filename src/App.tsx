@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
-import { BookOpen, Cpu, FolderPlus, Sparkles } from 'lucide-react';
+import { BookOpen, Cpu, FileCode, FolderPlus, Sparkles } from 'lucide-react';
 import { CbzReaderView } from './components/CbzReaderView';
 import { CbzMakerView } from './components/CbzMakerView';
+import { MetadataStudioView } from './components/MetadataStudioView';
 import { isTauriDesktop } from './core/runtimeAdapter';
 
-export type ActiveTab = 'reader' | 'maker';
+export type ActiveTab = 'reader' | 'maker' | 'metadata';
 
-const APP_VERSION = 'v1.0.0';
+const APP_VERSION = 'v1.1.0';
 
 export function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('reader');
@@ -42,39 +43,51 @@ export function App() {
               </span>
               <span className="hidden md:inline-flex items-center gap-1 text-[11px] font-mono px-2 py-0.5 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400">
                 <Cpu className="w-3 h-3 text-amber-400" />
-                {tauriMode ? 'Rust Engine' : 'Web Engine'}
+                {tauriMode ? 'Rust Engine' : 'Web + CLI Suite'}
               </span>
             </div>
             <p className="text-[11px] text-zinc-400 hidden sm:block">
-              Convertendo arquivos para a alta performance • CBZ Reader & Converter
+              Convertendo arquivos para a alta performance • Reader, Converter &amp; Metadata Studio
             </p>
           </div>
         </div>
 
-        {/* Seletor de Módulos: Reader vs Maker */}
-        <nav className="flex items-center gap-1.5 bg-zinc-900 p-1 rounded-xl border border-zinc-800">
+        {/* Seletor de Módulos: Reader vs Maker vs Metadata Studio */}
+        <nav className="flex items-center gap-1 sm:gap-1.5 bg-zinc-900 p-1 rounded-xl border border-zinc-800">
           <button
             onClick={() => setActiveTab('reader')}
-            className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs sm:text-sm font-semibold transition cursor-pointer ${
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs sm:text-sm font-semibold transition cursor-pointer ${
               activeTab === 'reader'
                 ? 'bg-rose-500 text-white shadow-md shadow-rose-500/25'
                 : 'text-zinc-300 hover:text-white'
             }`}
           >
             <BookOpen className="w-4 h-4" />
-            Reader
+            <span>Reader</span>
           </button>
 
           <button
             onClick={() => setActiveTab('maker')}
-            className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs sm:text-sm font-semibold transition cursor-pointer ${
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs sm:text-sm font-semibold transition cursor-pointer ${
               activeTab === 'maker'
                 ? 'bg-rose-500 text-white shadow-md shadow-rose-500/25'
                 : 'text-zinc-300 hover:text-white'
             }`}
           >
             <FolderPlus className="w-4 h-4" />
-            Converter / Maker
+            <span>Converter</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('metadata')}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs sm:text-sm font-semibold transition cursor-pointer ${
+              activeTab === 'metadata'
+                ? 'bg-rose-500 text-white shadow-md shadow-rose-500/25'
+                : 'text-zinc-300 hover:text-white'
+            }`}
+          >
+            <FileCode className="w-4 h-4" />
+            <span>Metadados</span>
           </button>
         </nav>
       </header>
@@ -86,8 +99,13 @@ export function App() {
             externalCbzFile={sharedCbzFile}
             onSwitchToMaker={() => setActiveTab('maker')}
           />
-        ) : (
+        ) : activeTab === 'maker' ? (
           <CbzMakerView onOpenCreatedCbzInReader={handleOpenCreatedInReader} />
+        ) : (
+          <MetadataStudioView
+            externalCbzFile={sharedCbzFile}
+            onOpenUpdatedCbzInReader={handleOpenCreatedInReader}
+          />
         )}
       </main>
 
@@ -108,7 +126,7 @@ export function App() {
           <div className="flex items-center gap-3 font-mono text-[11px]">
             <span className="flex items-center gap-1 text-zinc-500">
               <Sparkles className="w-3 h-3 text-rose-400" />
-              Schwartzian Key Extraction &bull; WebP Engine &bull; Sliding Window
+              Schwartzian Key Extraction &bull; WebP Engine &bull; ComicInfo Studio &bull; CLI
             </span>
             <span className="px-2 py-0.5 rounded-md bg-zinc-900 border border-zinc-800 text-rose-300 font-semibold">
               {APP_VERSION}

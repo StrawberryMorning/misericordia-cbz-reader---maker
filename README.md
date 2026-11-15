@@ -55,10 +55,14 @@ misericordia-cbz-reader-&-maker/
 │   │   ├── CbzReaderView.tsx       # Interface do Leitor + HUD de Telemetria da Janela Deslizante
 │   │   └── CbzMakerView.tsx        # Interface do Criador + Tabela de Chaves de Schwartz
 │   └── App.tsx
+├── cli/
+│   ├── src/main.rs                 # Binário nativo de Terminal para PC (proselytize info / meta / pack)
+│   └── Cargo.toml
 └── src-tauri/
     ├── src/
     │   ├── schwartz.rs             # Motor Rust da Transformada de Schwartz + Testes Unitários
-    │   ├── cbz_engine.rs           # Motor Rust de Diretório Central ZIP e Writer STORE
+    │   ├── cbz_engine.rs           # Motor Rust de Diretório Central ZIP, ZIP64 e Writer STORE
+    │   ├── comic_info.rs           # Parser, Serializador e Editor In-Place de ComicInfo.xml
     │   └── lib.rs
     └── Cargo.toml
 ```
@@ -67,18 +71,28 @@ misericordia-cbz-reader-&-maker/
 
 ## Como Executar
 
-### Web / Desenvolvimento (Vite + React)
+### 1. Aplicação Web (Vercel / React + Vite)
 ```bash
 npm install
 npm run dev
 ```
 
-### Build de Produção Web (Vercel)
+### 2. Aplicação PC via Terminal (Proselytize CLI em Rust)
 ```bash
-npm run build
+cd cli
+cargo build --release
+
+# Inspecionar Diretório Central e ComicInfo.xml de um CBZ:
+./target/release/proselytize info ../meu_quadrinho.cbz
+
+# Editar metadados ComicInfo.xml diretamente pelo terminal:
+./target/release/proselytize meta ../meu_quadrinho.cbz --title "Romance Dawn" --series "One Piece" --writer "Eiichiro Oda" --manga
+
+# Empacotar pasta de imagens com Transformada de Schwartz e Zero-Padding:
+./target/release/proselytize pack ./pasta_imagens -o capitulo_01.cbz --title "Capítulo 1" --manga
 ```
 
-### Testes do Motor em Rust
+### 3. Testes Unitários do Motor em Rust
 ```bash
 cd src-tauri && cargo test
 ```

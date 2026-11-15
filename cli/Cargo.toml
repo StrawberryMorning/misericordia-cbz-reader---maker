@@ -1,0 +1,13 @@
+[package]
+name = "proselytize-cli"
+version = "1.1.0"
+description = "Proselytize Terminal CLI by Manhã de Morango S/A — CBZ Inspector, Metadata Editor (ComicInfo.xml), and Schwartzian Packager"
+authors = ["StrawberryMorning <Manhã de Morango S/A>"]
+edition = "2021"
+
+[[bin]]
+name = "proselytize"
+path = "src/main.rs"
+
+[dependencies]
+misericordia_cbz_lib = { package = "proselytize", path = "../src-tauri" }

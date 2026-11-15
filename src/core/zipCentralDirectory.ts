@@ -260,3 +260,28 @@ export function createStoreCbzBlob(
 ): Blob {
   return createCbzBlob(entries, comicInfoXml, 0);
 }
+
+/**
+ * Atualiza ou injeta um novo ComicInfo.xml dentro de um arquivo .cbz existente,
+ * preservando os bytes originais das páginas sem recodificar as imagens.
+ */
+export async function repackCbzWithUpdatedComicInfo(
+  sourceFile: File | Blob,
+  pages: ZipCentralEntry[],
+  updatedComicInfoXml: string,
+  onProgress?: (current: number, total: number) => void
+): Promise<Blob> {
+  const entries: { archiveName: string; data: Uint8Array }[] = [];
+
+  for (let i = 0; i < pages.length; i++) {
+    const p = pages[i];
+    const bytes = await extractSingleEntryBytes(sourceFile, p);
+    entries.push({
+      archiveName: p.fileName,
+      data: bytes,
+    });
+    onProgress?.(i + 1, pages.length);
+  }
+
+  return createStoreCbzBlob(entries, updatedComicInfoXml);
+}
