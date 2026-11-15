@@ -226,6 +226,67 @@ pub fn criar_cbz_com_nivel(
     Ok(total)
 }
 
+/// Extrai as páginas de um arquivo .cbz (todas ou apenas uma página 1-based específica)
+/// para uma pasta de destino no disco.
+pub fn descompactar_cbz(
+    caminho_cbz: &str,
+    pasta_destino: &str,
+    pagina_especifica_1based: Option<usize>,
+) -> Result<usize, String> {
+    let indice = ler_diretorio_central_cbz(caminho_cbz)?;
+    if indice.pages.is_empty() {
+        return Err("Nenhuma página válida encontrada neste arquivo .cbz.".into());
+    }
+
+    fs::create_dir_all(pasta_destino)
+        .map_err(|e| format!("Falha ao criar pasta de destino '{}': {}", pasta_destino, e))?;
+
+    let reader = File::open(caminho_cbz).map_err(|e| format!("Falha ao abrir CBZ: {}", e))?;
+    let mut archive =
+        ZipArchive::new(reader).map_err(|e| format!("Erro no índice ZIP: {}", e))?;
+
+    if let Some(pag_num) = pagina_especifica_1based {
+        if pag_num == 0 || pag_num > indice.pages.len() {
+            return Err(format!(
+                "Página {} fora do intervalo válido (1..{}).",
+                pag_num,
+                indice.pages.len()
+            ));
+        }
+        let entrada = &indice.pages[pag_num - 1];
+        let mut zip_entry = archive
+            .by_name(&entrada.file_name)
+            .map_err(|e| e.to_string())?;
+        let nome_limpo = Path::new(&entrada.file_name)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("pagina.jpg");
+        let destino_arq = Path::new(pasta_destino).join(nome_limpo);
+        let mut out_file = File::create(&destino_arq).map_err(|e| e.to_string())?;
+        std::io::copy(&mut zip_entry, &mut out_file).map_err(|e| e.to_string())?;
+        return Ok(1);
+    }
+
+    // Se houver ComicInfo.xml, extrai também
+    if let Some(xml) = &indice.comic_info_xml {
+        let xml_path = Path::new(pasta_destino).join("ComicInfo.xml");
+        let _ = fs::write(xml_path, xml.as_bytes());
+    }
+
+    let total = indice.pages.len();
+    for (idx, entrada) in indice.pages.iter().enumerate() {
+        let mut zip_entry = archive
+            .by_name(&entrada.file_name)
+            .map_err(|e| e.to_string())?;
+        let nome_padronizado = formatar_nome_zero_padding(idx, total, &entrada.file_name);
+        let destino_arq = Path::new(pasta_destino).join(nome_padronizado);
+        let mut out_file = File::create(&destino_arq).map_err(|e| e.to_string())?;
+        std::io::copy(&mut zip_entry, &mut out_file).map_err(|e| e.to_string())?;
+    }
+
+    Ok(total)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

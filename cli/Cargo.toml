@@ -11,3 +11,4 @@ path = "src/main.rs"
 
 [dependencies]
 misericordia_cbz_lib = { package = "proselytize", path = "../src-tauri" }
+serde_json = "1.0"

@@ -151,6 +151,7 @@ name = "proselytize-cli"
 version = "1.1.0"
 dependencies = [
  "proselytize",
+ "serde_json",
 ]
 
 [[package]]

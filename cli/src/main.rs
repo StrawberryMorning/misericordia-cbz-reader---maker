@@ -1,7 +1,14 @@
-use misericordia_cbz_lib::cbz_engine::{criar_cbz_com_nivel, ler_diretorio_central_cbz};
+mod local_viewer_server;
+mod terminal_reader;
+
+use local_viewer_server::iniciar_servidor_visual_cbz;
+use misericordia_cbz_lib::cbz_engine::{
+    criar_cbz_com_nivel, descompactar_cbz, ler_diretorio_central_cbz,
+};
 use misericordia_cbz_lib::comic_info::{atualizar_metadados_cbz, ComicInfoMetaRust};
 use std::env;
 use std::process;
+use terminal_reader::executar_read_terminal;
 
 const VERSION: &str = "1.1.0";
 
@@ -13,6 +20,15 @@ fn imprimir_ajuda() {
     println!("USO:");
     println!("  proselytize <COMANDO> [ARGUMENTOS]\n");
     println!("COMANDOS:");
+    println!("  read <arquivo.cbz> [--page <N>] [--width <COLUNAS>]");
+    println!("      Renderiza e lê o quadrinho diretamente DENTRO do terminal em");
+    println!("      TrueColor 24-bit ANSI (▀) com Janela Deslizante [N-1..N+3] ativa.\n");
+    println!("  open <arquivo.cbz> [--port <PORTA>] [--no-browser]");
+    println!("      Sobe um servidor local instantâneo em Rust e abre o arquivo .cbz");
+    println!("      direto na interface visual do Proselytize Reader.\n");
+    println!("  unpack <arquivo.cbz> [-o <pasta_destino>] [--page <N>]");
+    println!("      Extrai todas as páginas (ou apenas a página --page N) do .cbz");
+    println!("      já ordenadas e padronizadas para uma pasta no disco.\n");
     println!("  info <arquivo.cbz>");
     println!("      Lê exclusivamente o Diretório Central do ZIP e exibe o índice,");
     println!("      chaves da Transformada de Schwartz e metadados do ComicInfo.xml.\n");
@@ -52,6 +68,107 @@ fn formatar_bytes(bytes: u64) -> String {
     } else {
         format!("{:.2} MB", bytes as f64 / (1024.0 * 1024.0))
     }
+}
+
+fn executar_read(args: &[String]) -> Result<(), String> {
+    let arquivo = args
+        .first()
+        .ok_or_else(|| "Informe o arquivo .cbz. Ex: proselytize read manga.cbz".to_string())?;
+
+    let mut pagina: Option<usize> = None;
+    let mut largura: u32 = 64;
+
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--page" | "-p" => {
+                i += 1;
+                if let Some(p_str) = args.get(i) {
+                    pagina = p_str.parse::<usize>().ok();
+                }
+            }
+            "--width" | "-w" => {
+                i += 1;
+                if let Some(w_str) = args.get(i) {
+                    largura = w_str.parse::<u32>().unwrap_or(64).clamp(24, 160);
+                }
+            }
+            outro => {
+                return Err(format!("Argumento desconhecido em 'read': {}", outro));
+            }
+        }
+        i += 1;
+    }
+
+    executar_read_terminal(arquivo, pagina, largura)
+}
+
+fn executar_open(args: &[String]) -> Result<(), String> {
+    let arquivo = args
+        .first()
+        .ok_or_else(|| "Informe o arquivo .cbz. Ex: proselytize open manga.cbz".to_string())?;
+
+    let mut porta: Option<u16> = None;
+    let mut abrir_navegador = true;
+
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--port" | "-p" => {
+                i += 1;
+                if let Some(p_str) = args.get(i) {
+                    porta = p_str.parse::<u16>().ok();
+                }
+            }
+            "--no-browser" => {
+                abrir_navegador = false;
+            }
+            outro => {
+                return Err(format!("Argumento desconhecido em 'open': {}", outro));
+            }
+        }
+        i += 1;
+    }
+
+    iniciar_servidor_visual_cbz(arquivo, porta, abrir_navegador)
+}
+
+fn executar_unpack(args: &[String]) -> Result<(), String> {
+    let arquivo = args
+        .first()
+        .ok_or_else(|| "Informe o arquivo .cbz. Ex: proselytize unpack manga.cbz -o ./extraido".to_string())?;
+
+    let mut pasta_destino = format!("{}_extracted", arquivo.trim_end_matches(".cbz"));
+    let mut pagina: Option<usize> = None;
+
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-o" | "--output" => {
+                i += 1;
+                if let Some(out) = args.get(i) {
+                    pasta_destino = out.clone();
+                }
+            }
+            "--page" | "-p" => {
+                i += 1;
+                if let Some(p_str) = args.get(i) {
+                    pagina = p_str.parse::<usize>().ok();
+                }
+            }
+            outro => {
+                return Err(format!("Argumento desconhecido em 'unpack': {}", outro));
+            }
+        }
+        i += 1;
+    }
+
+    let total = descompactar_cbz(arquivo, &pasta_destino, pagina)?;
+    println!(
+        "✅ Extraídas {} página(s) de '{}' para a pasta '{}'!",
+        total, arquivo, pasta_destino
+    );
+    Ok(())
 }
 
 fn executar_info(args: &[String]) -> Result<(), String> {
@@ -345,6 +462,9 @@ fn main() {
             println!("proselytize v{} (Manhã de Morango S/A ™)", VERSION);
             Ok(())
         }
+        "read" => executar_read(&args[1..]),
+        "open" => executar_open(&args[1..]),
+        "unpack" => executar_unpack(&args[1..]),
         "info" => executar_info(&args[1..]),
         "meta" => executar_meta(&args[1..]),
         "pack" => executar_pack(&args[1..]),
