@@ -406,15 +406,17 @@ export const CbzReaderView: React.FC<CbzReaderViewProps> = ({
               <BookOpen className="w-8 h-8 text-amber-400" />
             </div>
 
-            <h2 className="text-2xl font-bold text-zinc-100 mb-2">
-              Misericordia CBZ Reader
+            <h2 className="text-2xl font-bold text-zinc-100 mb-2 flex items-center justify-center gap-2">
+              <span className="bg-gradient-to-r from-rose-400 via-amber-300 to-amber-500 bg-clip-text text-transparent">
+                Proselytize Reader
+              </span>
             </h2>
             <p className="text-sm text-zinc-400 max-w-lg mx-auto mb-6 leading-relaxed">
               Leitura instantânea exclusiva do <strong>Diretório Central ZIP</strong>{' '}
               (sem extrair o arquivo inteiro), ordenação via{' '}
               <strong>Transformada de Schwartz</strong> e cache de{' '}
               <strong>Janela Deslizante [N-1 .. N+3]</strong> com decodificação GPU
-              assíncrona (<code className="text-amber-300">img.decode()</code>).
+              assíncrona (<code className="text-rose-300">img.decode()</code>).
             </p>
 
             {errorMsg && (

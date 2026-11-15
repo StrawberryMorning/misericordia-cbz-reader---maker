@@ -1,6 +1,15 @@
-# misericordia-cbz-reader-&-maker
+# Proselytize (v1.0.0)
+### Por Manhã de Morango S/A &trade;
 
-Aplicação de alta performance para leitura (**CBZ Reader**) e criação/padronização (**CBZ Maker**) de quadrinhos e mangás digitais (`.cbz`), com motor em **Rust (Tauri)** para Desktop e **React + TypeScript + Tailwind CSS** na Web/Vercel.
+<div align="center">
+  <img src="public/brand/strawberry-elephant.jpg" width="140" alt="Elefante Morango - Manhã de Morango S/A" style="border-radius: 20px;" />
+  <br />
+  <strong>"Abandonando formatos obsoletos para a nova fé da alta performance digital."</strong>
+</div>
+
+---
+
+**Proselytize** é uma suíte de alta performance para leitura (**CBZ Reader**) e conversão/padronização (**CBZ Converter & Maker**) de quadrinhos e mangás digitais (`.cbz`), com motor em **Rust (Tauri)** para Desktop e **React + TypeScript + Tailwind CSS** na Web/Vercel.
 
 ---
 

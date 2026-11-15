@@ -350,12 +350,12 @@ export const CbzMakerView: React.FC<CbzMakerViewProps> = ({
       {/* Cabeçalho Explicativo do Pipeline do CBZ Maker */}
       <div className="rounded-2xl bg-zinc-900/80 border border-zinc-800 p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
         <div className="space-y-2 max-w-2xl">
-          <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-medium">
+          <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs font-medium">
             <Zap className="w-3.5 h-3.5" />
-            Pipeline CBZ Maker • WebP Optimizer + PDF Rasterizer + ZIP Level 0..9
+            Proselytize Converter • Manhã de Morango S/A • WebP + PDF + ZIP64
           </div>
           <h1 className="text-2xl font-bold text-zinc-100">
-            Criador e Otimizador de Arquivos .CBZ
+            Converter &amp; Criar .CBZ de Alta Performance
           </h1>
           <p className="text-sm text-zinc-400 leading-relaxed">
             Aceita imagens (<code className="text-zinc-200">PNG, JPG, WebP</code>) e{' '}

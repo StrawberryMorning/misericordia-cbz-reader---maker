@@ -1,9 +1,9 @@
 {
-  "name": "misericordia-cbz-reader-and-maker",
-  "displayName": "misericordia-cbz-reader-&-maker",
+  "name": "proselytize",
+  "displayName": "Proselytize",
   "private": true,
-  "version": "0.1.0",
-  "description": "High-performance CBZ Reader & Maker powered by Schwartzian Transform (Key Extraction), ZIP Central Directory lazy streaming, and [N-1..N+3] Sliding Window Cache (Rust/Tauri + React/Vite).",
+  "version": "1.0.0",
+  "description": "Proselytize: High-performance CBZ Reader & Converter by Manhã de Morango S/A",
   "type": "module",
   "scripts": {
     "dev": "vite",

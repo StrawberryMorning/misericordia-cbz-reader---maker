@@ -1,8 +1,8 @@
 [package]
-name = "misericordia_cbz_reader_and_maker"
-version = "0.1.0"
-description = "Misericordia CBZ Reader & Maker Rust Core Engine (Schwartzian Transform + ZIP Central Directory + STORE Level 0)"
-authors = ["StrawberryMorning"]
+name = "proselytize"
+version = "1.0.0"
+description = "Proselytize Rust Engine by Manhã de Morango S/A (Schwartzian Transform, ZIP64 Central Directory & STORE Streamer)"
+authors = ["StrawberryMorning <Manhã de Morango S/A>"]
 edition = "2021"
 
 [lib]
