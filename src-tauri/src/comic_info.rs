@@ -55,6 +55,24 @@ fn extrair_tag_xml(xml: &str, tag: &str) -> String {
     String::new()
 }
 
+/// Procura no bloco <Pages> do ComicInfo.xml qual índice de imagem está marcado como Type="FrontCover".
+pub fn extrair_indice_front_cover(xml: &str) -> Option<usize> {
+    for linha in xml.lines() {
+        let trimmed = linha.trim();
+        if trimmed.starts_with("<Page ") && trimmed.contains("FrontCover") {
+            if let Some(img_pos) = trimmed.find("Image=\"") {
+                let resto = &trimmed[img_pos + 7..];
+                if let Some(aspas_fim) = resto.find('"') {
+                    if let Ok(idx) = resto[..aspas_fim].parse::<usize>() {
+                        return Some(idx);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 impl ComicInfoMetaRust {
     pub fn from_xml(xml: &str) -> Self {
         let page_count = extrair_tag_xml(xml, "PageCount")

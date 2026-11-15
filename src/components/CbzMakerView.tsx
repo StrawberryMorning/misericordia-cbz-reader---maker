@@ -10,11 +10,13 @@ import {
   Play,
   Sliders,
   Sparkles,
+  Star,
   Trash2,
   Zap,
 } from 'lucide-react';
 import {
   formatZeroPaddedPageName,
+  isLikelyCoverFilename,
   isPdfEntry,
   isValidImageEntry,
   schwartzNaturalSort,
@@ -71,6 +73,8 @@ export const CbzMakerView: React.FC<CbzMakerViewProps> = ({
   const [webpQuality, setWebpQuality] = useState<number>(85);
   const [maxWidth, setMaxWidth] = useState<number | null>(null);
   const [zipLevel, setZipLevel] = useState<ZipCompressionLevel>(0);
+  const [autoDetectCover, setAutoDetectCover] = useState<boolean>(true);
+  const [manualCoverId, setManualCoverId] = useState<string | null>(null);
 
   const [isBuilding, setIsBuilding] = useState<boolean>(false);
   const [progressLabel, setProgressLabel] = useState<string | null>(null);
@@ -106,10 +110,28 @@ export const CbzMakerView: React.FC<CbzMakerViewProps> = ({
       rawCandidates,
       (item) => item.originalName
     );
-    const total = result.indexed.length;
+    let orderedEntries = [...result.indexed];
+
+    // Promove a capa (manual ou detectada automaticamente por "capa"/"cover") para a posição 0 (001)
+    let coverIdx = -1;
+    if (manualCoverId) {
+      coverIdx = orderedEntries.findIndex(
+        (e) => e.item.id === manualCoverId
+      );
+    } else if (autoDetectCover) {
+      coverIdx = orderedEntries.findIndex((e) =>
+        isLikelyCoverFilename(e.item.originalName)
+      );
+    }
+    if (coverIdx > 0) {
+      const [coverEntry] = orderedEntries.splice(coverIdx, 1);
+      orderedEntries.unshift(coverEntry);
+    }
+
+    const total = orderedEntries.length;
     const forcedExt = mediaMode === 'webp' ? '.webp' : undefined;
 
-    const items: SortedMakerItem[] = result.indexed.map((entry, idx) => ({
+    const items: SortedMakerItem[] = orderedEntries.map((entry, idx) => ({
       candidate: entry.item,
       schwartzKey: entry.key,
       targetZeroPaddedName: formatZeroPaddedPageName(
@@ -125,7 +147,7 @@ export const CbzMakerView: React.FC<CbzMakerViewProps> = ({
       sortedItems: items,
       sortDurationUs: result.durationUs,
     };
-  }, [rawCandidates, mediaMode]);
+  }, [rawCandidates, mediaMode, manualCoverId, autoDetectCover]);
 
   const totalRawBytes = useMemo(
     () => rawCandidates.reduce((acc, item) => acc + item.byteSize, 0),
@@ -455,17 +477,32 @@ export const CbzMakerView: React.FC<CbzMakerViewProps> = ({
               </div>
 
               {sortedItems.length > 0 && (
-                <button
-                  onClick={() => {
-                    setRawCandidates([]);
-                    setDiscardedCount(0);
-                    setLastBuildStats(null);
-                  }}
-                  className="inline-flex items-center gap-1 text-xs text-rose-400 hover:text-rose-300 px-2.5 py-1 rounded-lg bg-rose-500/10 border border-rose-500/20"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  Limpar Lista
-                </button>
+                <div className="flex items-center gap-2">
+                  <label className="inline-flex items-center gap-1.5 text-[11px] text-zinc-300 cursor-pointer bg-zinc-950 px-2.5 py-1 rounded-lg border border-zinc-800">
+                    <input
+                      type="checkbox"
+                      checked={autoDetectCover}
+                      onChange={(e) => {
+                        setAutoDetectCover(e.target.checked);
+                        if (e.target.checked) setManualCoverId(null);
+                      }}
+                      className="accent-amber-500 rounded"
+                    />
+                    Auto-capa
+                  </label>
+                  <button
+                    onClick={() => {
+                      setRawCandidates([]);
+                      setDiscardedCount(0);
+                      setManualCoverId(null);
+                      setLastBuildStats(null);
+                    }}
+                    className="inline-flex items-center gap-1 text-xs text-rose-400 hover:text-rose-300 px-2.5 py-1 rounded-lg bg-rose-500/10 border border-rose-500/20"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Limpar Lista
+                  </button>
+                </div>
               )}
             </div>
 
@@ -482,19 +519,26 @@ export const CbzMakerView: React.FC<CbzMakerViewProps> = ({
                 <div className="grid grid-cols-12 px-4 py-2 bg-zinc-950/70 text-[11px] font-mono uppercase text-zinc-400">
                   <div className="col-span-5">Arquivo Original</div>
                   <div className="col-span-4">Chave de Schwartz [Texto, u64]</div>
-                  <div className="col-span-3 text-right">Saída Padronizada</div>
+                  <div className="col-span-3 text-right">Saída / Capa</div>
                 </div>
 
-                {sortedItems.map((item) => (
+                {sortedItems.map((item, idx) => (
                   <div
                     key={item.candidate.id}
-                    className="grid grid-cols-12 items-center px-4 py-2.5 text-xs hover:bg-zinc-800/40 transition font-mono"
+                    className={`grid grid-cols-12 items-center px-4 py-2.5 text-xs hover:bg-zinc-800/40 transition font-mono ${
+                      idx === 0 ? 'bg-amber-500/5' : ''
+                    }`}
                   >
                     <div
-                      className="col-span-5 truncate text-zinc-300 pr-2"
+                      className="col-span-5 truncate text-zinc-300 pr-2 flex items-center gap-1.5"
                       title={item.candidate.originalName}
                     >
-                      {item.candidate.originalName}
+                      {idx === 0 && (
+                        <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 font-semibold">
+                          CAPA
+                        </span>
+                      )}
+                      <span className="truncate">{item.candidate.originalName}</span>
                     </div>
                     <div
                       className="col-span-4 truncate text-sky-300 text-[11px] pr-2"
@@ -503,6 +547,16 @@ export const CbzMakerView: React.FC<CbzMakerViewProps> = ({
                       {item.schwartzKey.formattedKey}
                     </div>
                     <div className="col-span-3 flex items-center justify-end gap-1.5 text-emerald-400 font-semibold">
+                      {idx > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setManualCoverId(item.candidate.id)}
+                          className="p-1 rounded hover:bg-amber-500/20 text-zinc-500 hover:text-amber-300 transition cursor-pointer"
+                          title="Definir esta imagem como Capa (001)"
+                        >
+                          <Star className="w-3 h-3" />
+                        </button>
+                      )}
                       <ArrowRight className="w-3 h-3 text-zinc-500" />
                       {item.targetZeroPaddedName}
                     </div>

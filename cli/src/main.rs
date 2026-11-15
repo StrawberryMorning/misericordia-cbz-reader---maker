@@ -3,11 +3,14 @@ mod terminal_reader;
 
 use local_viewer_server::iniciar_servidor_visual_cbz;
 use misericordia_cbz_lib::cbz_engine::{
-    criar_cbz_com_nivel, descompactar_cbz, ler_diretorio_central_cbz,
+    criar_cbz_com_nivel, descompactar_cbz, extrair_bytes_pagina_cbz, ler_diretorio_central_cbz,
 };
-use misericordia_cbz_lib::comic_info::{atualizar_metadados_cbz, ComicInfoMetaRust};
+use misericordia_cbz_lib::comic_info::{
+    atualizar_metadados_cbz, extrair_indice_front_cover, ComicInfoMetaRust,
+};
 use std::env;
-use std::process;
+use std::io::Write;
+use std::process::{self, Command, Stdio};
 use terminal_reader::executar_read_terminal;
 
 const VERSION: &str = "1.1.0";
@@ -29,6 +32,9 @@ fn imprimir_ajuda() {
     println!("  unpack <arquivo.cbz> [-o <pasta_destino>] [--page <N>]");
     println!("      Extrai todas as páginas (ou apenas a página --page N) do .cbz");
     println!("      já ordenadas e padronizadas para uma pasta no disco.\n");
+    println!("  thumb <entrada.cbz> <saida.png> [tamanho]");
+    println!("      Extrai apenas a capa (FrontCover ou 1ª página) para gerar a");
+    println!("      miniatura/ícone do arquivo .cbz no sistema operacional.\n");
     println!("  info <arquivo.cbz>");
     println!("      Lê exclusivamente o Diretório Central do ZIP e exibe o índice,");
     println!("      chaves da Transformada de Schwartz e metadados do ComicInfo.xml.\n");
@@ -454,6 +460,59 @@ fn executar_pack(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn executar_thumb(args: &[String]) -> Result<(), String> {
+    if args.len() < 2 {
+        return Err("Uso: proselytize thumb <entrada.cbz> <saida.png> [tamanho]".into());
+    }
+
+    let entrada_cbz = &args[0];
+    let saida_png = &args[1];
+    let tamanho: u32 = args
+        .get(2)
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(256)
+        .clamp(32, 1024);
+
+    let indice = ler_diretorio_central_cbz(entrada_cbz)?;
+    if indice.pages.is_empty() {
+        return Err("Nenhuma página válida encontrada no CBZ.".into());
+    }
+
+    // Prioriza a página marcada como FrontCover no ComicInfo.xml; senão, usa a página 0
+    let cover_idx = indice
+        .comic_info_xml
+        .as_deref()
+        .and_then(extrair_indice_front_cover)
+        .filter(|&i| i < indice.pages.len())
+        .unwrap_or(0);
+
+    let bytes_capa = extrair_bytes_pagina_cbz(entrada_cbz, &indice.pages[cover_idx].file_name)?;
+
+    let mut child = Command::new("magick")
+        .args([
+            "-",
+            "-thumbnail",
+            &format!("{}x{}>", tamanho, tamanho),
+            &format!("png:{}", saida_png),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Erro ao invocar ImageMagick ('magick'): {}", e))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(&bytes_capa).map_err(|e| e.to_string())?;
+    }
+
+    let status = child.wait().map_err(|e| e.to_string())?;
+    if !status.success() {
+        return Err("Falha ao gerar miniatura PNG da capa.".into());
+    }
+
+    Ok(())
+}
+
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     if args.is_empty() {
@@ -473,6 +532,7 @@ fn main() {
         "read" => executar_read(&args[1..]),
         "open" => executar_open(&args[1..]),
         "unpack" => executar_unpack(&args[1..]),
+        "thumb" => executar_thumb(&args[1..]),
         "info" => executar_info(&args[1..]),
         "meta" => executar_meta(&args[1..]),
         "pack" => executar_pack(&args[1..]),

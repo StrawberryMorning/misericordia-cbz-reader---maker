@@ -159,6 +159,24 @@ export function compareSchwartzKeys(a: SchwartzSortKey, b: SchwartzSortKey): num
 }
 
 /**
+ * Detecta se o nome do arquivo indica explicitamente uma capa (ex: capa.jpg, cover.png, front.webp).
+ */
+export function isLikelyCoverFilename(filePath: string): boolean {
+  const base = filePath.replace(/\\/g, '/').split('/').pop()?.toLowerCase() || '';
+  const nameWithoutExt = base.replace(/\.[^.]+$/, '');
+  return (
+    nameWithoutExt === 'capa' ||
+    nameWithoutExt === 'cover' ||
+    nameWithoutExt === 'front' ||
+    nameWithoutExt === 'frontcover' ||
+    nameWithoutExt.startsWith('capa_') ||
+    nameWithoutExt.startsWith('cover_') ||
+    nameWithoutExt.endsWith('_capa') ||
+    nameWithoutExt.endsWith('_cover')
+  );
+}
+
+/**
  * Executa a Transformada de Schwartz completa:
  * 1. Map O(N): Extrai chave estruturada única vez para cada item
  * 2. Sort O(N log N): Ordena comparando apenas primitivas pré-extraídas
