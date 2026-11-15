@@ -141,8 +141,17 @@ pub fn criar_cbz_modo_store(
     criar_cbz_com_nivel(pasta_origem, caminho_saida_cbz, comic_info_xml, 0)
 }
 
+const LIMITE_SEGURO_ZIP32_BYTES: u64 = 3_800_000_000;
+const LIMITE_SEGURO_ZIP32_ENTRADAS: usize = 65_000;
+
+/// Determina automaticamente se o pacote deve usar a extensão ZIP64.
+pub fn deve_usar_zip64(total_bytes: u64, total_entradas: usize) -> bool {
+    total_bytes >= LIMITE_SEGURO_ZIP32_BYTES || total_entradas >= LIMITE_SEGURO_ZIP32_ENTRADAS
+}
+
 /// Empacota uma pasta de imagens em um arquivo .cbz com nível de compressão configurável:
 /// `0` = STORE (sem compressão), `1..=9` = DEFLATE.
+/// Ativa automaticamente ZIP64 quando o total exceder ~3.8 GB ou 65.000 páginas.
 pub fn criar_cbz_com_nivel(
     pasta_origem: &str,
     caminho_saida_cbz: &str,
@@ -153,12 +162,16 @@ pub fn criar_cbz_com_nivel(
         fs::read_dir(pasta_origem).map_err(|e| format!("Erro ao ler pasta: {}", e))?;
 
     let mut caminhos_validos = Vec::new();
+    let mut tamanho_total_estimado: u64 = 0;
+
     for entry_res in dir_entries {
         if let Ok(entry) = entry_res {
             let path = entry.path();
             if path.is_file() {
                 if let Some(nome) = path.file_name().and_then(|n| n.to_str()) {
                     if eh_entrada_imagem_valida(nome) {
+                        let tamanho_arquivo = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                        tamanho_total_estimado = tamanho_total_estimado.saturating_add(tamanho_arquivo);
                         caminhos_validos.push((nome.to_string(), path));
                     }
                 }
@@ -172,18 +185,22 @@ pub fn criar_cbz_com_nivel(
 
     let (ordenados, _) = ordenar_por_schwartz(caminhos_validos, |item| item.0.as_str());
     let total = ordenados.len();
+    let usar_zip64 = deve_usar_zip64(tamanho_total_estimado, total);
 
     let arquivo_saida = File::create(caminho_saida_cbz)
         .map_err(|e| format!("Erro ao criar arquivo CBZ: {}", e))?;
     let mut zip_writer = ZipWriter::new(arquivo_saida);
 
     let zip_options = if nivel_compressao == 0 {
-        SimpleFileOptions::default().compression_method(CompressionMethod::Stored)
+        SimpleFileOptions::default()
+            .compression_method(CompressionMethod::Stored)
+            .large_file(usar_zip64)
     } else {
         let clamped_level = nivel_compressao.min(9) as i64;
         SimpleFileOptions::default()
             .compression_method(CompressionMethod::Deflated)
             .compression_level(Some(clamped_level))
+            .large_file(usar_zip64)
     };
 
     if let Some(xml) = comic_info_xml {
@@ -207,4 +224,19 @@ pub fn criar_cbz_com_nivel(
 
     zip_writer.finish().map_err(|e| e.to_string())?;
     Ok(total)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn testa_deteccao_automatica_zip64() {
+        // Caso normal: 300 páginas (~90 MB) -> ZIP32 padrão
+        assert!(!deve_usar_zip64(90_000_000, 300));
+        // Caso One Piece: 21.500 páginas (~4.9 GB) -> Ativa ZIP64 automaticamente
+        assert!(deve_usar_zip64(4_900_000_000, 21_500));
+        // Caso muitas páginas pequenas (> 65.000 entradas) -> Ativa ZIP64
+        assert!(deve_usar_zip64(500_000_000, 65_001));
+    }
 }
