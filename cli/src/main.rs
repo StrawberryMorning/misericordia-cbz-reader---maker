@@ -1,3 +1,4 @@
+mod linux_integration;
 mod local_viewer_server;
 mod terminal_reader;
 
@@ -29,12 +30,16 @@ fn imprimir_ajuda() {
     println!("      Use --ansi para renderizar em blocos TrueColor dentro do terminal.\n");
     println!("  open <arquivo.cbz> [--port <PORTA>] [--no-browser]");
     println!("      Sobe um servidor local em Rust e abre o .cbz no navegador padrão.\n");
-    println!("  unpack <arquivo.cbz> [-o <pasta_destino>] [--page <N>]");
-    println!("      Extrai todas as páginas (ou apenas a página --page N) do .cbz");
-    println!("      já ordenadas e padronizadas para uma pasta no disco.\n");
+    println!("  unpack <arquivo.cbz...> [-o <pasta_destino>] [--page <N>]");
+    println!("      Extrai todas as páginas (ou apenas a página --page N) de um ou vários");
+    println!("      arquivos .cbz já ordenadas e padronizadas para pastas no disco.\n");
     println!("  thumb <entrada.cbz> <saida.png> [tamanho]");
+    println!("  thumb --refresh <arquivo.cbz...>");
     println!("      Extrai apenas a capa (FrontCover ou 1ª página) para gerar a");
-    println!("      miniatura/ícone do arquivo .cbz no sistema operacional.\n");
+    println!("      miniatura/ícone do .cbz, ou atualiza o cache de miniaturas no Linux.\n");
+    println!("  install-linux");
+    println!("      Instala o thumbnailer, atalho .desktop e submenu 'Proselytize'");
+    println!("      no clique direito do Thunar (~/.config/Thunar/uca.xml).\n");
     println!("  info <arquivo.cbz>");
     println!("      Lê exclusivamente o Diretório Central do ZIP e exibe o índice,");
     println!("      chaves da Transformada de Schwartz e metadados do ComicInfo.xml.\n");
@@ -148,20 +153,23 @@ fn executar_open(args: &[String]) -> Result<(), String> {
 }
 
 fn executar_unpack(args: &[String]) -> Result<(), String> {
-    let arquivo = args
-        .first()
-        .ok_or_else(|| "Informe o arquivo .cbz. Ex: proselytize unpack manga.cbz -o ./extraido".to_string())?;
+    if args.is_empty() {
+        return Err(
+            "Informe o arquivo .cbz. Ex: proselytize unpack manga.cbz -o ./extraido".into(),
+        );
+    }
 
-    let mut pasta_destino = format!("{}_extracted", arquivo.trim_end_matches(".cbz"));
+    let mut arquivos: Vec<String> = Vec::new();
+    let mut pasta_destino_custom: Option<String> = None;
     let mut pagina: Option<usize> = None;
 
-    let mut i = 1;
+    let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "-o" | "--output" => {
                 i += 1;
                 if let Some(out) = args.get(i) {
-                    pasta_destino = out.clone();
+                    pasta_destino_custom = Some(out.clone());
                 }
             }
             "--page" | "-p" => {
@@ -170,18 +178,43 @@ fn executar_unpack(args: &[String]) -> Result<(), String> {
                     pagina = p_str.parse::<usize>().ok();
                 }
             }
-            outro => {
-                return Err(format!("Argumento desconhecido em 'unpack': {}", outro));
+            arg if arg.starts_with('-') => {
+                return Err(format!("Argumento desconhecido em 'unpack': {}", arg));
+            }
+            arquivo => {
+                arquivos.push(arquivo.to_string());
             }
         }
         i += 1;
     }
 
-    let total = descompactar_cbz(arquivo, &pasta_destino, pagina)?;
-    println!(
-        "✅ Extraídas {} página(s) de '{}' para a pasta '{}'!",
-        total, arquivo, pasta_destino
-    );
+    if arquivos.is_empty() {
+        return Err("Nenhum arquivo .cbz informado para 'unpack'.".into());
+    }
+
+    for arquivo in &arquivos {
+        let pasta_destino = if arquivos.len() == 1 {
+            pasta_destino_custom.clone().unwrap_or_else(|| {
+                let base = arquivo
+                    .strip_suffix(".cbz")
+                    .or_else(|| arquivo.strip_suffix(".CBZ"))
+                    .unwrap_or(arquivo);
+                format!("{}_extracted", base)
+            })
+        } else {
+            let base = arquivo
+                .strip_suffix(".cbz")
+                .or_else(|| arquivo.strip_suffix(".CBZ"))
+                .unwrap_or(arquivo);
+            format!("{}_extracted", base)
+        };
+
+        let total = descompactar_cbz(arquivo, &pasta_destino, pagina)?;
+        println!(
+            "✅ Extraídas {} página(s) de '{}' para a pasta '{}'!",
+            total, arquivo, pasta_destino
+        );
+    }
     Ok(())
 }
 
@@ -388,8 +421,9 @@ fn executar_pack(args: &[String]) -> Result<(), String> {
         return Err("Informe a pasta de origem. Ex: proselytize pack ./imagens -o cap01.cbz".into());
     }
 
-    let pasta_origem = &args[0];
-    let mut saida_cbz = String::from("proselytize_output.cbz");
+    let mut pastas: Vec<String> = Vec::new();
+    let mut saida_cbz_custom: Option<String> = None;
+    let mut auto_name = false;
     let mut nivel: u8 = 0;
     let mut meta = ComicInfoMetaRust {
         language_iso: "pt-BR".to_string(),
@@ -399,14 +433,17 @@ fn executar_pack(args: &[String]) -> Result<(), String> {
     };
     let mut gerar_xml = false;
 
-    let mut i = 1;
+    let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "-o" | "--output" => {
                 i += 1;
                 if let Some(out) = args.get(i) {
-                    saida_cbz = out.clone();
+                    saida_cbz_custom = Some(out.clone());
                 }
+            }
+            "--auto-name" => {
+                auto_name = true;
             }
             "--level" => {
                 i += 1;
@@ -439,11 +476,18 @@ fn executar_pack(args: &[String]) -> Result<(), String> {
                 meta.manga = "YesAndRightToLeft".to_string();
                 gerar_xml = true;
             }
-            outro => {
-                return Err(format!("Argumento desconhecido em 'pack': {}", outro));
+            arg if arg.starts_with('-') => {
+                return Err(format!("Argumento desconhecido em 'pack': {}", arg));
+            }
+            pasta => {
+                pastas.push(pasta.to_string());
             }
         }
         i += 1;
+    }
+
+    if pastas.is_empty() {
+        return Err("Nenhuma pasta de origem informada para 'pack'.".into());
     }
 
     let xml_opcional = if gerar_xml {
@@ -452,15 +496,31 @@ fn executar_pack(args: &[String]) -> Result<(), String> {
         None
     };
 
-    let total_paginas = criar_cbz_com_nivel(pasta_origem, &saida_cbz, xml_opcional, nivel)?;
-    println!(
-        "✅ Pacote '{}' gerado com sucesso! ({} páginas ordenadas via Schwartz • Nível ZIP: {})",
-        saida_cbz, total_paginas, nivel
-    );
+    for pasta_origem in &pastas {
+        let saida_cbz = if pastas.len() == 1 && !auto_name {
+            saida_cbz_custom
+                .clone()
+                .unwrap_or_else(|| "proselytize_output.cbz".to_string())
+        } else {
+            let limpa = pasta_origem.trim_end_matches(['/', '\\']);
+            format!("{}.cbz", limpa)
+        };
+
+        let total_paginas =
+            criar_cbz_com_nivel(pasta_origem, &saida_cbz, xml_opcional.clone(), nivel)?;
+        println!(
+            "✅ Pacote '{}' gerado com sucesso! ({} páginas ordenadas via Schwartz • Nível ZIP: {})",
+            saida_cbz, total_paginas, nivel
+        );
+    }
     Ok(())
 }
 
 fn executar_thumb(args: &[String]) -> Result<(), String> {
+    if args.first().map(|s| s.as_str()) == Some("--refresh") {
+        return linux_integration::executar_thumb_refresh(&args[1..]);
+    }
+
     if args.len() < 2 {
         return Err("Uso: proselytize thumb <entrada.cbz> <saida.png> [tamanho]".into());
     }
@@ -533,6 +593,7 @@ fn main() {
         "open" => executar_open(&args[1..]),
         "unpack" => executar_unpack(&args[1..]),
         "thumb" => executar_thumb(&args[1..]),
+        "install-linux" => linux_integration::executar_install_linux(),
         "info" => executar_info(&args[1..]),
         "meta" => executar_meta(&args[1..]),
         "pack" => executar_pack(&args[1..]),
