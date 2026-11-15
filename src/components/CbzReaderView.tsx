@@ -288,11 +288,18 @@ export const CbzReaderView: React.FC<CbzReaderViewProps> = ({
     toggleFullscreen,
   ]);
 
-  // Interação de Zoom via Scroll do Mouse (Wheel) no PC
-  const handleWheelZoom = useCallback((e: React.WheelEvent) => {
-    // Zoom com Ctrl+Scroll ou se já estiver ampliado
-    if (e.ctrlKey || e.metaKey || zoomLevel > 1) {
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+
+  // Previne o zoom padrão do navegador na aba inteira quando fizer Ctrl+Wheel ou Pinch no viewport
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+
+    const onNativeWheel = (e: WheelEvent) => {
+      // Bloqueia a ação nativa do navegador de dar zoom na página inteira
       e.preventDefault();
+      e.stopPropagation();
+
       const delta = e.deltaY < 0 ? 0.15 : -0.15;
       setZoomLevel((prev) => {
         const next = Math.max(1, Math.min(3.5, Number((prev + delta).toFixed(2))));
@@ -301,8 +308,47 @@ export const CbzReaderView: React.FC<CbzReaderViewProps> = ({
         }
         return next;
       });
-    }
-  }, [zoomLevel]);
+    };
+
+    // { passive: false } é obrigatório para poder chamar e.preventDefault()
+    el.addEventListener('wheel', onNativeWheel, { passive: false });
+
+    return () => {
+      el.removeEventListener('wheel', onNativeWheel);
+    };
+  }, [indexSummary, snapshot]);
+
+  // Touch Events para Mobile: Gesto de Pinça (Pinch-to-Zoom) + Toque Duplo
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+
+    const onNativeTouchMove = (e: TouchEvent) => {
+      if (e.touches.length === 2 && pinchStartDistRef.current !== null) {
+        // Bloqueia o zoom padrão da página do navegador no celular
+        e.preventDefault();
+        e.stopPropagation();
+
+        const dx = e.touches[0].clientX - e.touches[1].clientX;
+        const dy = e.touches[0].clientY - e.touches[1].clientY;
+        const currentDist = Math.hypot(dx, dy);
+        const scale = currentDist / pinchStartDistRef.current;
+        const nextZoom = Math.max(
+          1,
+          Math.min(3.5, Number((pinchStartZoomRef.current * scale).toFixed(2)))
+        );
+        setZoomLevel(nextZoom);
+        if (nextZoom === 1) {
+          setPanOffset({ x: 0, y: 0 });
+        }
+      }
+    };
+
+    el.addEventListener('touchmove', onNativeTouchMove, { passive: false });
+    return () => {
+      el.removeEventListener('touchmove', onNativeTouchMove);
+    };
+  }, [indexSummary, snapshot]);
 
   // Arrastar Imagem Ampliada com o Mouse (Pan)
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -644,16 +690,16 @@ export const CbzReaderView: React.FC<CbzReaderViewProps> = ({
       {/* Área Principal de Visualização + HUD da Janela Deslizante */}
       {indexSummary && snapshot && (
         <div className="flex-1 flex flex-col lg:flex-row relative overflow-hidden">
-          {/* Viewport da Página com Suporte a Zoom e Pan */}
+          {/* Viewport da Página com Suporte a Zoom e Pan Exclusivo na Imagem */}
           <div
-            onWheel={handleWheelZoom}
+            ref={viewportRef}
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
             onMouseLeave={handleMouseUp}
             onTouchStart={handleTouchStart}
-            onTouchMove={handleTouchMove}
             onTouchEnd={handleTouchEnd}
+            style={{ touchAction: 'none' }}
             className={`flex-1 relative flex items-center justify-center bg-zinc-950 overflow-hidden select-none min-h-[70vh] ${
               zoomLevel > 1 ? (isPanning ? 'cursor-grabbing' : 'cursor-grab') : 'cursor-default'
             }`}
