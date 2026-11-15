@@ -62,6 +62,19 @@ export function isValidImageEntry(filePath: string): boolean {
 }
 
 /**
+ * Verifica se o arquivo selecionado é um PDF válido (descartando arquivos ocultos).
+ */
+export function isPdfEntry(filePath: string): boolean {
+  const normalized = filePath.replace(/\\/g, '/').trim();
+  if (!normalized || normalized.endsWith('/')) return false;
+  const parts = normalized.split('/');
+  for (const part of parts) {
+    if (part && part.startsWith('.')) return false;
+  }
+  return parts[parts.length - 1].toLowerCase().endsWith('.pdf');
+}
+
+/**
  * Extrai a chave estruturada (Transformada de Schwartz / Key Extraction) em passo único O(N).
  * Divide uma única vez a string em segmentos alternados de Texto (normalizado) e Número (BigInt primitivo).
  */
@@ -192,10 +205,17 @@ export function schwartzNaturalSort<T>(
 export function formatZeroPaddedPageName(
   zeroBasedIndex: number,
   totalPages: number,
-  originalName: string
+  originalName: string,
+  forcedExtension?: string
 ): string {
   const digits = Math.max(3, String(totalPages).length);
   const pageNumber = String(zeroBasedIndex + 1).padStart(digits, '0');
+  if (forcedExtension) {
+    const cleanExt = forcedExtension.startsWith('.')
+      ? forcedExtension.toLowerCase()
+      : `.${forcedExtension.toLowerCase()}`;
+    return `${pageNumber}${cleanExt}`;
+  }
   const dotIdx = originalName.lastIndexOf('.');
   const ext = dotIdx !== -1 ? originalName.slice(dotIdx).toLowerCase() : '.jpg';
   return `${pageNumber}${ext}`;

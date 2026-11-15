@@ -8,24 +8,33 @@ import {
   FolderOpen,
   ImagePlus,
   Play,
+  Sliders,
   Sparkles,
   Trash2,
   Zap,
 } from 'lucide-react';
 import {
   formatZeroPaddedPageName,
+  isPdfEntry,
   isValidImageEntry,
   schwartzNaturalSort,
   SchwartzSortKey,
 } from '../core/schwartzSort';
 import { buildComicInfoXml, ComicInfoMetadata } from '../core/comicInfo';
-import { createStoreCbzBlob } from '../core/zipCentralDirectory';
+import { createCbzBlob, inferMimeType } from '../core/zipCentralDirectory';
 import { generateDemoMessyFolder } from '../core/demoComicGenerator';
+import {
+  MediaOptimizationMode,
+  optimizeImageToWebP,
+  rasterizePdfToPages,
+  ZipCompressionLevel,
+} from '../core/mediaOptimizer';
 
 interface RawCandidateFile {
   id: string;
   originalName: string;
   byteSize: number;
+  sourceKind: 'image' | 'pdf-page';
   getBytes: () => Promise<Uint8Array>;
 }
 
@@ -56,8 +65,17 @@ export const CbzMakerView: React.FC<CbzMakerViewProps> = ({
   const [outputArchiveName, setOutputArchiveName] = useState<string>(
     'manga_volume_01.cbz'
   );
+
+  // Opções de Otimização e Compressão
+  const [mediaMode, setMediaMode] = useState<MediaOptimizationMode>('webp');
+  const [webpQuality, setWebpQuality] = useState<number>(85);
+  const [maxWidth, setMaxWidth] = useState<number | null>(null);
+  const [zipLevel, setZipLevel] = useState<ZipCompressionLevel>(0);
+
   const [isBuilding, setIsBuilding] = useState<boolean>(false);
+  const [progressLabel, setProgressLabel] = useState<string | null>(null);
   const [lastBuildStats, setLastBuildStats] = useState<{
+    originalTotalBytes: number;
     fileSize: number;
     buildTimeMs: number;
     file: File;
@@ -89,6 +107,7 @@ export const CbzMakerView: React.FC<CbzMakerViewProps> = ({
       (item) => item.originalName
     );
     const total = result.indexed.length;
+    const forcedExt = mediaMode === 'webp' ? '.webp' : undefined;
 
     const items: SortedMakerItem[] = result.indexed.map((entry, idx) => ({
       candidate: entry.item,
@@ -96,7 +115,8 @@ export const CbzMakerView: React.FC<CbzMakerViewProps> = ({
       targetZeroPaddedName: formatZeroPaddedPageName(
         idx,
         total,
-        entry.item.originalName
+        entry.item.originalName,
+        forcedExt
       ),
       pageNumber: idx + 1,
     }));
@@ -105,7 +125,12 @@ export const CbzMakerView: React.FC<CbzMakerViewProps> = ({
       sortedItems: items,
       sortDurationUs: result.durationUs,
     };
-  }, [rawCandidates]);
+  }, [rawCandidates, mediaMode]);
+
+  const totalRawBytes = useMemo(
+    () => rawCandidates.reduce((acc, item) => acc + item.byteSize, 0),
+    [rawCandidates]
+  );
 
   const xmlPreviewText = useMemo(() => {
     return buildComicInfoXml(
@@ -120,10 +145,11 @@ export const CbzMakerView: React.FC<CbzMakerViewProps> = ({
     );
   }, [meta, sortedItems]);
 
-  const handleIngestFileList = (fileList: FileList | null) => {
+  const handleIngestFileList = async (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
 
     const valid: RawCandidateFile[] = [];
+    const pdfFiles: File[] = [];
     let ignored = 0;
 
     Array.from(fileList).forEach((file, idx) => {
@@ -131,17 +157,52 @@ export const CbzMakerView: React.FC<CbzMakerViewProps> = ({
         (file as File & { webkitRelativePath?: string }).webkitRelativePath ||
         file.name;
 
-      if (isValidImageEntry(relativeOrName)) {
+      if (isPdfEntry(relativeOrName)) {
+        pdfFiles.push(file);
+      } else if (isValidImageEntry(relativeOrName)) {
         valid.push({
           id: `${relativeOrName}-${file.size}-${idx}-${Date.now()}`,
           originalName: relativeOrName,
           byteSize: file.size,
+          sourceKind: 'image',
           getBytes: async () => new Uint8Array(await file.arrayBuffer()),
         });
       } else {
         ignored++;
       }
     });
+
+    if (pdfFiles.length > 0) {
+      setIsBuilding(true);
+      try {
+        for (const pdfFile of pdfFiles) {
+          setProgressLabel(`Rasterizando PDF "${pdfFile.name}"...`);
+          const pdfPages = await rasterizePdfToPages(pdfFile, {
+            targetFormat: mediaMode === 'webp' ? 'webp' : 'png',
+            qualityPercent: webpQuality,
+            maxWidth,
+            onProgress: (curr, total) => {
+              setProgressLabel(
+                `Extraindo PDF "${pdfFile.name}": página ${curr} de ${total}...`
+              );
+            },
+          });
+
+          pdfPages.forEach((p, idx) => {
+            valid.push({
+              id: `pdf-${pdfFile.name}-${p.pageNumber}-${idx}-${Date.now()}`,
+              originalName: p.virtualName,
+              byteSize: p.byteSize,
+              sourceKind: 'pdf-page',
+              getBytes: async () => p.data,
+            });
+          });
+        }
+      } finally {
+        setIsBuilding(false);
+        setProgressLabel(null);
+      }
+    }
 
     setDiscardedCount((prev) => prev + ignored);
     setRawCandidates((prev) => [...prev, ...valid]);
@@ -159,6 +220,7 @@ export const CbzMakerView: React.FC<CbzMakerViewProps> = ({
           id: `demo-${i}-${df.originalMessyName}`,
           originalName: df.originalMessyName,
           byteSize: df.data.byteLength,
+          sourceKind: 'image',
           getBytes: async () => df.data,
         }))
       );
@@ -188,17 +250,57 @@ export const CbzMakerView: React.FC<CbzMakerViewProps> = ({
     try {
       const t0 = performance.now();
       const entries: { archiveName: string; data: Uint8Array }[] = [];
+      let originalTotalBytes = 0;
 
-      for (const item of sortedItems) {
-        const bytes = await item.candidate.getBytes();
+      for (let i = 0; i < sortedItems.length; i++) {
+        const item = sortedItems[i];
+        const rawBytes = await item.candidate.getBytes();
+        originalTotalBytes += rawBytes.byteLength;
+
+        let finalBytes = rawBytes;
+
+        if (mediaMode === 'webp') {
+          setProgressLabel(
+            `Otimizando página ${i + 1}/${sortedItems.length} para WebP (${webpQuality}%)...`
+          );
+          const mime = inferMimeType(item.candidate.originalName);
+          const optimized = await optimizeImageToWebP(
+            rawBytes,
+            mime,
+            webpQuality,
+            maxWidth
+          );
+          finalBytes = optimized.data;
+        } else {
+          setProgressLabel(
+            `Empacotando página ${i + 1}/${sortedItems.length}...`
+          );
+        }
+
         entries.push({
           archiveName: item.targetZeroPaddedName,
-          data: bytes,
+          data: finalBytes,
         });
       }
 
-      const xmlString = includeComicInfo ? xmlPreviewText : undefined;
-      const cbzBlob = createStoreCbzBlob(entries, xmlString);
+      setProgressLabel(
+        `Gerando arquivo ZIP (Nível ${zipLevel}${zipLevel === 0 ? ' - STORE' : ' - DEFLATE'})...`
+      );
+
+      const finalXml = includeComicInfo
+        ? buildComicInfoXml(
+            {
+              ...meta,
+              pageCount: entries.length,
+            },
+            entries.map((e, index) => ({
+              index,
+              byteSize: e.data.byteLength,
+            }))
+          )
+        : undefined;
+
+      const cbzBlob = createCbzBlob(entries, finalXml, zipLevel);
 
       const cleanName = outputArchiveName.trim().endsWith('.cbz')
         ? outputArchiveName.trim()
@@ -210,6 +312,7 @@ export const CbzMakerView: React.FC<CbzMakerViewProps> = ({
 
       const buildTimeMs = Math.max(1, Math.round(performance.now() - t0));
       setLastBuildStats({
+        originalTotalBytes,
         fileSize: finalFile.size,
         buildTimeMs,
         file: finalFile,
@@ -229,8 +332,18 @@ export const CbzMakerView: React.FC<CbzMakerViewProps> = ({
       }
     } finally {
       setIsBuilding(false);
+      setProgressLabel(null);
     }
   };
+
+  const savingsPercent =
+    lastBuildStats && lastBuildStats.originalTotalBytes > 0
+      ? Math.round(
+          ((lastBuildStats.originalTotalBytes - lastBuildStats.fileSize) /
+            lastBuildStats.originalTotalBytes) *
+            100
+        )
+      : null;
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-8">
@@ -239,19 +352,17 @@ export const CbzMakerView: React.FC<CbzMakerViewProps> = ({
         <div className="space-y-2 max-w-2xl">
           <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-medium">
             <Zap className="w-3.5 h-3.5" />
-            Pipeline CBZ Maker • ZIP STORE (Nível 0) + Transformada de Schwartz
+            Pipeline CBZ Maker • WebP Optimizer + PDF Rasterizer + ZIP Level 0..9
           </div>
           <h1 className="text-2xl font-bold text-zinc-100">
-            Criador e Padronizador de Arquivos .CBZ
+            Criador e Otimizador de Arquivos .CBZ
           </h1>
           <p className="text-sm text-zinc-400 leading-relaxed">
-            Filtra imagens válidas (<code className="text-zinc-200">JPG, PNG, WebP</code>),
-            descarta arquivos ocultos do sistema, aplica a{' '}
-            <strong>Transformada de Schwartz (Key Extraction)</strong> para ordenar
-            nomes sem zeros à esquerda, renomeia com{' '}
-            <strong>Zero-Padding dinâmico</strong> (<code className="text-amber-300">001.jpg</code>)
-            e empacota com <strong>ComicInfo.xml</strong> no modo{' '}
-            <strong>STORE (sem recompressão)</strong>.
+            Aceita imagens (<code className="text-zinc-200">PNG, JPG, WebP</code>) e{' '}
+            <code className="text-amber-300">PDF</code>, descarta arquivos ocultos do sistema,
+            ordena via <strong>Transformada de Schwartz</strong>, converte tudo para{' '}
+            <strong>WebP otimizado</strong> (economizando até 85% em PNGs) e empacota com{' '}
+            <strong>ComicInfo.xml</strong>.
           </p>
         </div>
 
@@ -271,12 +382,12 @@ export const CbzMakerView: React.FC<CbzMakerViewProps> = ({
             }}
           />
 
-          {/* Input de Imagens Avulsas */}
+          {/* Input de Imagens e PDFs Avulsos */}
           <input
             ref={filesInputRef}
             type="file"
             multiple
-            accept=".jpg,.jpeg,.png,.webp,.gif,.avif"
+            accept=".jpg,.jpeg,.png,.webp,.gif,.avif,.bmp,.pdf,application/pdf"
             className="hidden"
             onChange={(e) => {
               handleIngestFileList(e.target.files);
@@ -286,30 +397,39 @@ export const CbzMakerView: React.FC<CbzMakerViewProps> = ({
 
           <button
             onClick={() => folderInputRef.current?.click()}
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold text-xs sm:text-sm transition cursor-pointer shadow-lg shadow-amber-500/15"
+            disabled={isBuilding}
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-zinc-950 font-semibold text-xs sm:text-sm transition cursor-pointer shadow-lg shadow-amber-500/15"
           >
             <FolderOpen className="w-4 h-4" />
-            Selecionar Pasta de Imagens
+            Selecionar Pasta
           </button>
 
           <button
             onClick={() => filesInputRef.current?.click()}
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-100 font-medium text-xs sm:text-sm border border-zinc-700 transition cursor-pointer"
+            disabled={isBuilding}
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-zinc-100 font-medium text-xs sm:text-sm border border-zinc-700 transition cursor-pointer"
           >
             <ImagePlus className="w-4 h-4 text-sky-400" />
-            Adicionar Imagens
+            Adicionar Imagens / PDF
           </button>
 
           <button
             onClick={handleLoadMessyDemoFolder}
             disabled={isBuilding}
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-zinc-800/80 hover:bg-zinc-700 text-amber-300 font-medium text-xs sm:text-sm border border-amber-500/30 transition cursor-pointer"
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-zinc-800/80 hover:bg-zinc-700 disabled:opacity-50 text-amber-300 font-medium text-xs sm:text-sm border border-amber-500/30 transition cursor-pointer"
           >
             <Sparkles className="w-4 h-4" />
-            Carregar Pasta Teste (Nomes Desordenados)
+            Carregar Pasta Teste
           </button>
         </div>
       </div>
+
+      {progressLabel && (
+        <div className="rounded-xl bg-sky-500/10 border border-sky-500/30 px-4 py-3 flex items-center gap-3 text-xs text-sky-200 font-mono">
+          <div className="w-4 h-4 rounded-full border-2 border-sky-400 border-t-transparent animate-spin shrink-0" />
+          <span>{progressLabel}</span>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
         {/* Coluna Esquerda: Tabela de Ordenação de Schwartz & Renomeação Zero-Padding */}
@@ -321,13 +441,13 @@ export const CbzMakerView: React.FC<CbzMakerViewProps> = ({
                   1. Ordenação Natural (Transformada de Schwartz) &amp; Zero-Padding
                 </h2>
                 <p className="text-xs text-zinc-400">
-                  {sortedItems.length} páginas válidas prontas •{' '}
+                  {sortedItems.length} páginas ({formatBytes(totalRawBytes)}) •{' '}
                   {discardedCount > 0 && (
                     <span className="text-rose-400">
                       {discardedCount} arquivo(s) oculto(s)/sistema descartado(s) •{' '}
                     </span>
                   )}
-                  Tempo de Key Extraction + Sort:{' '}
+                  Schwartz Sort:{' '}
                   <span className="font-mono text-emerald-400 font-semibold">
                     {sortDurationUs} µs
                   </span>
@@ -352,18 +472,15 @@ export const CbzMakerView: React.FC<CbzMakerViewProps> = ({
             {sortedItems.length === 0 ? (
               <div className="p-12 text-center space-y-3">
                 <p className="text-sm text-zinc-400">
-                  Nenhuma imagem carregada ainda. Selecione uma pasta do seu computador
-                  ou clique em{' '}
-                  <strong className="text-amber-300">
-                    &ldquo;Carregar Pasta Teste (Nomes Desordenados)&rdquo;
-                  </strong>{' '}
-                  para ver a Transformada de Schwartz ordenando arquivos sem zeros à esquerda.
+                  Nenhuma imagem ou PDF carregado ainda. Selecione uma pasta, arquivos
+                  <strong className="text-zinc-200"> PNG / JPG / PDF</strong> ou clique em{' '}
+                  <strong className="text-amber-300">&ldquo;Carregar Pasta Teste&rdquo;</strong>.
                 </p>
               </div>
             ) : (
-              <div className="max-h-[460px] overflow-y-auto divide-y divide-zinc-800/70">
+              <div className="max-h-[560px] overflow-y-auto divide-y divide-zinc-800/70">
                 <div className="grid grid-cols-12 px-4 py-2 bg-zinc-950/70 text-[11px] font-mono uppercase text-zinc-400">
-                  <div className="col-span-5">Nome Original Bruto</div>
+                  <div className="col-span-5">Arquivo Original</div>
                   <div className="col-span-4">Chave de Schwartz [Texto, u64]</div>
                   <div className="col-span-3 text-right">Saída Padronizada</div>
                 </div>
@@ -396,8 +513,115 @@ export const CbzMakerView: React.FC<CbzMakerViewProps> = ({
           </div>
         </div>
 
-        {/* Coluna Direita: Metadados ComicInfo.xml & Empacotador ZIP STORE */}
-        <div className="lg:col-span-5 space-y-6">
+        {/* Coluna Direita: Otimização WebP, Metadados ComicInfo.xml & Empacotador ZIP */}
+        <div className="lg:col-span-5 space-y-5">
+          {/* Painel de Otimização de Mídia & Nível de Compressão */}
+          <div className="rounded-2xl bg-zinc-900/90 border border-zinc-800 p-5 space-y-4">
+            <h2 className="font-bold text-sm text-zinc-100 flex items-center gap-2">
+              <Sliders className="w-4 h-4 text-sky-400" />
+              2. Otimização de Mídia (WebP) &amp; Compressão ZIP
+            </h2>
+
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <button
+                type="button"
+                onClick={() => setMediaMode('webp')}
+                className={`p-2.5 rounded-xl border text-left transition cursor-pointer ${
+                  mediaMode === 'webp'
+                    ? 'bg-amber-500/15 border-amber-500/50 text-amber-200'
+                    : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                <div className="font-semibold">Converter p/ WebP</div>
+                <div className="text-[11px] opacity-80">
+                  -75% em PNG / -35% em JPG
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setMediaMode('original')}
+                className={`p-2.5 rounded-xl border text-left transition cursor-pointer ${
+                  mediaMode === 'original'
+                    ? 'bg-amber-500/15 border-amber-500/50 text-amber-200'
+                    : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                <div className="font-semibold">Manter Originais</div>
+                <div className="text-[11px] opacity-80">
+                  Passthrough sem recompressão
+                </div>
+              </button>
+            </div>
+
+            {mediaMode === 'webp' && (
+              <div className="space-y-3 pt-1 text-xs">
+                <div>
+                  <div className="flex justify-between mb-1">
+                    <span className="text-zinc-400">Qualidade WebP</span>
+                    <span className="font-mono text-amber-400 font-semibold">
+                      {webpQuality}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={50}
+                    max={100}
+                    step={5}
+                    value={webpQuality}
+                    onChange={(e) => setWebpQuality(parseInt(e.target.value, 10))}
+                    className="w-full accent-amber-500 cursor-pointer"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-zinc-400 mb-1">
+                    Largura Máxima (Redimensionamento Opcional)
+                  </label>
+                  <select
+                    value={maxWidth ?? 'original'}
+                    onChange={(e) =>
+                      setMaxWidth(
+                        e.target.value === 'original'
+                          ? null
+                          : parseInt(e.target.value, 10)
+                      )
+                    }
+                    className="w-full px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100 focus:border-amber-500 focus:outline-none"
+                  >
+                    <option value="original">Original (Sem redimensionar)</option>
+                    <option value="2048">2048 px (Alta Resolução / 4K)</option>
+                    <option value="1600">1600 px (Ideal para PC / Tablet)</option>
+                    <option value="1280">1280 px (Ultra Leve / E-Reader)</option>
+                  </select>
+                </div>
+              </div>
+            )}
+
+            <div className="text-xs pt-1 border-t border-zinc-800/80">
+              <label className="block text-zinc-400 mb-1">
+                Nível de Compressão do Container ZIP
+              </label>
+              <select
+                value={zipLevel}
+                onChange={(e) =>
+                  setZipLevel(parseInt(e.target.value, 10) as ZipCompressionLevel)
+                }
+                className="w-full px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100 focus:border-amber-500 focus:outline-none"
+              >
+                <option value={0}>
+                  Nível 0 — STORE (Sem compressão • Recomendado p/ WebP/JPG)
+                </option>
+                <option value={1}>Nível 1 — Deflate Rápido</option>
+                <option value={6}>Nível 6 — Deflate Padrão</option>
+                <option value={9}>
+                  Nível 9 — Deflate Máximo (Útil se mantiver PNGs brutos)
+                </option>
+              </select>
+            </div>
+          </div>
+
+          {/* Metadados ComicInfo.xml */}
           <div className="rounded-2xl bg-zinc-900/90 border border-zinc-800 p-5 space-y-4">
             <div className="flex items-center justify-between">
               <label className="flex items-center gap-2 cursor-pointer">
@@ -409,7 +633,7 @@ export const CbzMakerView: React.FC<CbzMakerViewProps> = ({
                 />
                 <span className="font-bold text-sm text-zinc-100 flex items-center gap-1.5">
                   <FileCode className="w-4 h-4 text-amber-400" />
-                  2. Gerar ComicInfo.xml na Raiz
+                  3. Gerar ComicInfo.xml na Raiz
                 </span>
               </label>
 
@@ -496,22 +720,8 @@ export const CbzMakerView: React.FC<CbzMakerViewProps> = ({
                   </div>
                 </div>
 
-                <div>
-                  <label className="block text-zinc-400 mb-1">
-                    Autor / Roteirista
-                  </label>
-                  <input
-                    type="text"
-                    value={meta.writer}
-                    onChange={(e) =>
-                      setMeta({ ...meta, writer: e.target.value })
-                    }
-                    className="w-full px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100 focus:border-amber-500 focus:outline-none"
-                  />
-                </div>
-
                 {showXmlPreview && (
-                  <pre className="p-3 rounded-xl bg-zinc-950 border border-zinc-800 text-[11px] font-mono text-amber-200 overflow-x-auto max-h-48">
+                  <pre className="p-3 rounded-xl bg-zinc-950 border border-zinc-800 text-[11px] font-mono text-amber-200 overflow-x-auto max-h-44">
                     {xmlPreviewText}
                   </pre>
                 )}
@@ -519,10 +729,10 @@ export const CbzMakerView: React.FC<CbzMakerViewProps> = ({
             )}
           </div>
 
-          {/* Etapa Final: Empacotamento ZIP Nível 0 (STORE) */}
+          {/* Etapa Final: Empacotamento */}
           <div className="rounded-2xl bg-zinc-900/90 border border-zinc-800 p-5 space-y-4">
             <h3 className="font-bold text-sm text-zinc-100">
-              3. Empacotamento ZIP Nível Zero (STORE)
+              4. Empacotamento Final (.CBZ)
             </h3>
 
             <div className="text-xs">
@@ -544,7 +754,7 @@ export const CbzMakerView: React.FC<CbzMakerViewProps> = ({
                 className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-40 text-zinc-950 font-semibold text-xs sm:text-sm transition cursor-pointer"
               >
                 <Download className="w-4 h-4" />
-                {isBuilding ? 'Empacotando STORE...' : 'Baixar Arquivo .CBZ'}
+                {isBuilding ? 'Processando...' : 'Baixar Arquivo .CBZ'}
               </button>
 
               <button
@@ -558,20 +768,30 @@ export const CbzMakerView: React.FC<CbzMakerViewProps> = ({
             </div>
 
             {lastBuildStats && (
-              <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-xs text-emerald-200 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                  <span>
-                    CBZ gerado em <strong>{lastBuildStats.buildTimeMs} ms</strong> (
-                    {formatBytes(lastBuildStats.fileSize)}) no modo STORE!
-                  </span>
+              <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-xs text-emerald-200 space-y-1">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <span>
+                      CBZ gerado em <strong>{lastBuildStats.buildTimeMs} ms</strong>!
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => onOpenCreatedCbzInReader(lastBuildStats.file)}
+                    className="underline font-semibold hover:text-white ml-2"
+                  >
+                    Ler agora
+                  </button>
                 </div>
-                <button
-                  onClick={() => onOpenCreatedCbzInReader(lastBuildStats.file)}
-                  className="underline font-semibold hover:text-white ml-2"
-                >
-                  Ler agora
-                </button>
+                <div className="text-[11px] font-mono text-emerald-300/90 pl-6">
+                  {formatBytes(lastBuildStats.originalTotalBytes)} →{' '}
+                  <strong>{formatBytes(lastBuildStats.fileSize)}</strong>
+                  {savingsPercent !== null && savingsPercent > 0 && (
+                    <span className="ml-1.5 text-amber-300 font-semibold">
+                      (Economia de {savingsPercent}%)
+                    </span>
+                  )}
+                </div>
               </div>
             )}
           </div>

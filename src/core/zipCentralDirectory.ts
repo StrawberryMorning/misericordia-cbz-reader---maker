@@ -222,26 +222,41 @@ export async function extractSingleEntryBytes(
 
 /**
  * Empacota uma lista de arquivos já ordenados e renomeados em um arquivo .cbz
+ * com nível de compressão ZIP configurável:
+ * 0 = STORE (Sem compressão, ideal para imagens), 1 = Deflate Rápido, 6 = Padrão, 9 = Máximo.
+ */
+export function createCbzBlob(
+  entries: { archiveName: string; data: Uint8Array }[],
+  comicInfoXml?: string,
+  compressionLevel: 0 | 1 | 6 | 9 = 0
+): Blob {
+  const zipStructure: Zippable = {};
+
+  if (comicInfoXml) {
+    const encoder = new TextEncoder();
+    zipStructure['ComicInfo.xml'] = [
+      encoder.encode(comicInfoXml),
+      { level: compressionLevel },
+    ];
+  }
+
+  for (const item of entries) {
+    zipStructure[item.archiveName] = [item.data, { level: compressionLevel }];
+  }
+
+  const zippedBytes = zipSync(zipStructure, { level: compressionLevel });
+  return new Blob([zippedBytes.buffer as ArrayBuffer], {
+    type: 'application/vnd.comicbook+zip',
+  });
+}
+
+/**
+ * Empacota uma lista de arquivos já ordenados e renomeados em um arquivo .cbz
  * configurado no modo STORE (Nível 0 - Sem Compressão), ideal para imagens.
  */
 export function createStoreCbzBlob(
   entries: { archiveName: string; data: Uint8Array }[],
   comicInfoXml?: string
 ): Blob {
-  const zipStructure: Zippable = {};
-
-  if (comicInfoXml) {
-    const encoder = new TextEncoder();
-    zipStructure['ComicInfo.xml'] = [encoder.encode(comicInfoXml), { level: 0 }];
-  }
-
-  for (const item of entries) {
-    // level: 0 garante modo STORE estrito (sem recomprimir imagens JPG/PNG/WebP)
-    zipStructure[item.archiveName] = [item.data, { level: 0 }];
-  }
-
-  const zippedBytes = zipSync(zipStructure, { level: 0 });
-  return new Blob([zippedBytes.buffer as ArrayBuffer], {
-    type: 'application/vnd.comicbook+zip',
-  });
+  return createCbzBlob(entries, comicInfoXml, 0);
 }

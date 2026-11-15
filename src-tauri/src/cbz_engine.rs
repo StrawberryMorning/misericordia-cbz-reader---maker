@@ -138,6 +138,17 @@ pub fn criar_cbz_modo_store(
     caminho_saida_cbz: &str,
     comic_info_xml: Option<String>,
 ) -> Result<usize, String> {
+    criar_cbz_com_nivel(pasta_origem, caminho_saida_cbz, comic_info_xml, 0)
+}
+
+/// Empacota uma pasta de imagens em um arquivo .cbz com nível de compressão configurável:
+/// `0` = STORE (sem compressão), `1..=9` = DEFLATE.
+pub fn criar_cbz_com_nivel(
+    pasta_origem: &str,
+    caminho_saida_cbz: &str,
+    comic_info_xml: Option<String>,
+    nivel_compressao: u8,
+) -> Result<usize, String> {
     let dir_entries =
         fs::read_dir(pasta_origem).map_err(|e| format!("Erro ao ler pasta: {}", e))?;
 
@@ -166,13 +177,18 @@ pub fn criar_cbz_modo_store(
         .map_err(|e| format!("Erro ao criar arquivo CBZ: {}", e))?;
     let mut zip_writer = ZipWriter::new(arquivo_saida);
 
-    // Nível zero (STORE): sem recompressão de imagens
-    let store_options =
-        SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    let zip_options = if nivel_compressao == 0 {
+        SimpleFileOptions::default().compression_method(CompressionMethod::Stored)
+    } else {
+        let clamped_level = nivel_compressao.min(9) as i64;
+        SimpleFileOptions::default()
+            .compression_method(CompressionMethod::Deflated)
+            .compression_level(Some(clamped_level))
+    };
 
     if let Some(xml) = comic_info_xml {
         zip_writer
-            .start_file("ComicInfo.xml", store_options)
+            .start_file("ComicInfo.xml", zip_options)
             .map_err(|e| e.to_string())?;
         zip_writer
             .write_all(xml.as_bytes())
@@ -184,7 +200,7 @@ pub fn criar_cbz_modo_store(
         let bytes = fs::read(&caminho_completo).map_err(|e| e.to_string())?;
 
         zip_writer
-            .start_file(nome_padronizado, store_options)
+            .start_file(nome_padronizado, zip_options)
             .map_err(|e| e.to_string())?;
         zip_writer.write_all(&bytes).map_err(|e| e.to_string())?;
     }
