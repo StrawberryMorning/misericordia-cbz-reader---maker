@@ -11,10 +11,14 @@ import {
   Maximize2,
   Minimize2,
   Repeat,
+  RotateCcw,
   Sparkles,
   Trash2,
   Upload,
+  X,
   Zap,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react';
 import {
   CbzIndexSummary,
@@ -49,20 +53,47 @@ export const CbzReaderView: React.FC<CbzReaderViewProps> = ({
   const [snapshot, setSnapshot] = useState<SlidingWindowSnapshot | null>(null);
   const [fitMode, setFitMode] = useState<FitMode>('fit-height');
   const [direction, setDirection] = useState<ReadingDirection>('ltr');
-  const [showHud, setShowHud] = useState<boolean>(true);
+  const [showHud, setShowHud] = useState<boolean>(false); // Padrão mais discreto
   const [showMetaModal, setShowMetaModal] = useState<boolean>(false);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [isLoadingFile, setIsLoadingFile] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isDraggingOver, setIsDraggingOver] = useState<boolean>(false);
 
+  // Estados de Zoom & Pan
+  const [zoomLevel, setZoomLevel] = useState<number>(1); // 1 = 100%, 3 = 300%
+  const [panOffset, setPanOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState<boolean>(false);
+  const panStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const pinchStartDistRef = useRef<number | null>(null);
+  const pinchStartZoomRef = useRef<number>(1);
+  const lastTapTimeRef = useRef<number>(0);
+
   const managerRef = useRef<SlidingWindowCacheManager | null>(null);
   const readerContainerRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  // Fecha o quadrinho, libera a memória e retorna à tela inicial
+  const handleCloseComic = useCallback(() => {
+    if (managerRef.current) {
+      managerRef.current.dispose();
+      managerRef.current = null;
+    }
+    setIndexSummary(null);
+    setSnapshot(null);
+    setZoomLevel(1);
+    setPanOffset({ x: 0, y: 0 });
+  }, []);
+
+  const resetZoom = useCallback(() => {
+    setZoomLevel(1);
+    setPanOffset({ x: 0, y: 0 });
+  }, []);
+
   const openCbzBlob = useCallback(async (file: File) => {
     setIsLoadingFile(true);
     setErrorMsg(null);
+    resetZoom();
 
     if (managerRef.current) {
       managerRef.current.dispose();
@@ -104,7 +135,7 @@ export const CbzReaderView: React.FC<CbzReaderViewProps> = ({
     } finally {
       setIsLoadingFile(false);
     }
-  }, []);
+  }, [resetZoom]);
 
   useEffect(() => {
     if (externalCbzFile) {
@@ -132,8 +163,9 @@ export const CbzReaderView: React.FC<CbzReaderViewProps> = ({
 
   const goToPage = useCallback((pageIdx: number) => {
     if (!managerRef.current) return;
+    resetZoom();
     managerRef.current.navigateTo(pageIdx);
-  }, []);
+  }, [resetZoom]);
 
   const stepForward = useCallback(() => {
     if (!snapshot) return;
@@ -146,20 +178,22 @@ export const CbzReaderView: React.FC<CbzReaderViewProps> = ({
   }, [snapshot, goToPage]);
 
   const handleLeftEdgeAction = useCallback(() => {
+    if (zoomLevel > 1.05) return; // Se estiver com zoom, não vira página ao clicar na borda
     if (direction === 'ltr') {
       stepBackward();
     } else {
       stepForward();
     }
-  }, [direction, stepBackward, stepForward]);
+  }, [direction, stepBackward, stepForward, zoomLevel]);
 
   const handleRightEdgeAction = useCallback(() => {
+    if (zoomLevel > 1.05) return;
     if (direction === 'ltr') {
       stepForward();
     } else {
       stepBackward();
     }
-  }, [direction, stepForward, stepBackward]);
+  }, [direction, stepForward, stepBackward, zoomLevel]);
 
   const toggleFullscreen = useCallback(() => {
     if (!readerContainerRef.current) return;
@@ -172,6 +206,7 @@ export const CbzReaderView: React.FC<CbzReaderViewProps> = ({
     }
   }, []);
 
+  // Atalhos de teclado (incluindo Esc para fechar)
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (!snapshot) return;
@@ -182,7 +217,14 @@ export const CbzReaderView: React.FC<CbzReaderViewProps> = ({
         return;
       }
 
-      if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        if (zoomLevel > 1) {
+          resetZoom();
+        } else {
+          handleCloseComic();
+        }
+      } else if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') {
         e.preventDefault();
         handleLeftEdgeAction();
       } else if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') {
@@ -215,6 +257,19 @@ export const CbzReaderView: React.FC<CbzReaderViewProps> = ({
         setShowHud((prev) => !prev);
       } else if (e.key === 'f' || e.key === 'F') {
         toggleFullscreen();
+      } else if (e.key === '+' || e.key === '=') {
+        e.preventDefault();
+        setZoomLevel((z) => Math.min(3.5, Number((z + 0.25).toFixed(2))));
+      } else if (e.key === '-' || e.key === '_') {
+        e.preventDefault();
+        setZoomLevel((z) => {
+          const next = Math.max(1, Number((z - 0.25).toFixed(2)));
+          if (next === 1) setPanOffset({ x: 0, y: 0 });
+          return next;
+        });
+      } else if (e.key === '0') {
+        e.preventDefault();
+        resetZoom();
       }
     };
 
@@ -222,6 +277,9 @@ export const CbzReaderView: React.FC<CbzReaderViewProps> = ({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [
     snapshot,
+    zoomLevel,
+    handleCloseComic,
+    resetZoom,
     handleLeftEdgeAction,
     handleRightEdgeAction,
     stepForward,
@@ -229,6 +287,102 @@ export const CbzReaderView: React.FC<CbzReaderViewProps> = ({
     goToPage,
     toggleFullscreen,
   ]);
+
+  // Interação de Zoom via Scroll do Mouse (Wheel) no PC
+  const handleWheelZoom = useCallback((e: React.WheelEvent) => {
+    // Zoom com Ctrl+Scroll ou se já estiver ampliado
+    if (e.ctrlKey || e.metaKey || zoomLevel > 1) {
+      e.preventDefault();
+      const delta = e.deltaY < 0 ? 0.15 : -0.15;
+      setZoomLevel((prev) => {
+        const next = Math.max(1, Math.min(3.5, Number((prev + delta).toFixed(2))));
+        if (next === 1) {
+          setPanOffset({ x: 0, y: 0 });
+        }
+        return next;
+      });
+    }
+  }, [zoomLevel]);
+
+  // Arrastar Imagem Ampliada com o Mouse (Pan)
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (zoomLevel <= 1) return;
+    setIsPanning(true);
+    panStartRef.current = {
+      x: e.clientX - panOffset.x,
+      y: e.clientY - panOffset.y,
+    };
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!isPanning || zoomLevel <= 1) return;
+    setPanOffset({
+      x: e.clientX - panStartRef.current.x,
+      y: e.clientY - panStartRef.current.y,
+    });
+  };
+
+  const handleMouseUp = () => {
+    setIsPanning(false);
+  };
+
+  // Touch Events para Mobile: Gesto de Pinça (Pinch-to-Zoom) + Toque Duplo
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length === 2) {
+      // Inicia pinça
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      pinchStartDistRef.current = Math.hypot(dx, dy);
+      pinchStartZoomRef.current = zoomLevel;
+    } else if (e.touches.length === 1) {
+      // Verifica toque duplo rápido para resetar/alternar zoom
+      const now = performance.now();
+      if (now - lastTapTimeRef.current < 300) {
+        if (zoomLevel > 1) {
+          resetZoom();
+        } else {
+          setZoomLevel(2.0);
+        }
+        lastTapTimeRef.current = 0;
+        return;
+      }
+      lastTapTimeRef.current = now;
+
+      if (zoomLevel > 1) {
+        setIsPanning(true);
+        panStartRef.current = {
+          x: e.touches[0].clientX - panOffset.x,
+          y: e.touches[0].clientY - panOffset.y,
+        };
+      }
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (e.touches.length === 2 && pinchStartDistRef.current !== null) {
+      // Executa zoom em pinça
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      const currentDist = Math.hypot(dx, dy);
+      const scale = currentDist / pinchStartDistRef.current;
+      const nextZoom = Math.max(1, Math.min(3.5, Number((pinchStartZoomRef.current * scale).toFixed(2))));
+      setZoomLevel(nextZoom);
+      if (nextZoom === 1) {
+        setPanOffset({ x: 0, y: 0 });
+      }
+    } else if (e.touches.length === 1 && isPanning && zoomLevel > 1) {
+      // Arraste com 1 dedo quando ampliado
+      setPanOffset({
+        x: e.touches[0].clientX - panStartRef.current.x,
+        y: e.touches[0].clientY - panStartRef.current.y,
+      });
+    }
+  };
+
+  const handleTouchEnd = () => {
+    pinchStartDistRef.current = null;
+    setIsPanning(false);
+  };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
@@ -267,114 +421,119 @@ export const CbzReaderView: React.FC<CbzReaderViewProps> = ({
         }}
       />
 
-      {/* Barra de Ferramentas do Leitor */}
+      {/* Barra de Ferramentas Superior do Leitor */}
       {indexSummary && snapshot && (
-        <div className="bg-zinc-900/90 backdrop-blur border-b border-zinc-800 px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 z-20">
-          <div className="flex items-center gap-3 min-w-0">
+        <div className="bg-zinc-900/90 backdrop-blur border-b border-zinc-800 px-3 sm:px-4 py-2 flex flex-wrap items-center justify-between gap-2.5 z-20">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            {/* Botão de Fechar / Sair bem visível e aparente */}
+            <button
+              onClick={handleCloseComic}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 border border-rose-500/40 text-xs font-semibold transition cursor-pointer shadow-sm shrink-0"
+              title="Fechar quadrinho e voltar ao início (Atalho: Esc)"
+            >
+              <X className="w-3.5 h-3.5" />
+              <span>Fechar</span>
+            </button>
+
             <button
               onClick={() => fileInputRef.current?.click()}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs font-medium text-zinc-200 transition border border-zinc-700"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs font-medium text-zinc-200 transition border border-zinc-700 shrink-0"
               title="Abrir outro arquivo .cbz"
             >
               <Upload className="w-3.5 h-3.5 text-amber-400" />
-              Abrir .CBZ
+              <span className="hidden sm:inline">Trocar CBZ</span>
             </button>
 
             <div className="truncate">
               <div className="flex items-center gap-2">
-                <span className="font-semibold text-sm text-zinc-100 truncate max-w-[220px] sm:max-w-md">
+                <span className="font-semibold text-xs sm:text-sm text-zinc-100 truncate max-w-[140px] sm:max-w-xs md:max-w-md">
                   {indexSummary.comicInfo?.title || indexSummary.fileName}
                 </span>
-                <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30">
-                  Índice Central: {indexSummary.centralDirParseTimeMs} ms
-                </span>
-                <span className="hidden md:inline-block text-[11px] font-mono px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                  Schwartz Sort: {indexSummary.schwartzSortTimeUs} µs
+                <span className="hidden md:inline-block text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                  {indexSummary.centralDirParseTimeMs} ms
                 </span>
               </div>
-              <p className="text-xs text-zinc-400 truncate font-mono">
-                Arquivo: {indexSummary.fileName} ({formatBytes(indexSummary.fileSize)}) •{' '}
-                Entrada atual: {currentPageEntry?.fileName}
+              <p className="text-[11px] text-zinc-400 truncate font-mono hidden sm:block">
+                {currentPageEntry?.fileName} ({formatBytes(currentPageEntry?.compressedSize || 0)})
               </p>
             </div>
           </div>
 
           {/* Controles de Visualização */}
-          <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
             {/* Direção de Leitura: Ocidental LTR vs Mangá RTL */}
             <button
               onClick={() =>
                 setDirection((d) => (d === 'ltr' ? 'rtl' : 'ltr'))
               }
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition ${
+              className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition ${
                 direction === 'rtl'
                   ? 'bg-rose-500/20 text-rose-200 border-rose-500/40'
                   : 'bg-zinc-800 text-zinc-200 border-zinc-700 hover:bg-zinc-700'
               }`}
-              title="Atalho: Tecla M"
+              title="Alternar sentido de leitura Ocidental/Mangá (Atalho: M)"
             >
               <Repeat className="w-3.5 h-3.5" />
-              {direction === 'ltr'
-                ? 'Modo Ocidental (→)'
-                : 'Modo Mangá RTL (←)'}
+              <span className="hidden md:inline">
+                {direction === 'ltr' ? 'Ocidental (→)' : 'Mangá RTL (←)'}
+              </span>
             </button>
 
-            {/* Ajuste de Visualização */}
+            {/* Ajuste de Enquadramento */}
             <div className="inline-flex rounded-lg bg-zinc-800 p-0.5 border border-zinc-700 text-xs">
               <button
-                onClick={() => setFitMode('fit-height')}
-                className={`px-2.5 py-1 rounded-md transition ${
+                onClick={() => {
+                  setFitMode('fit-height');
+                  resetZoom();
+                }}
+                className={`px-2 py-1 rounded-md transition ${
                   fitMode === 'fit-height'
                     ? 'bg-amber-500 text-zinc-950 font-semibold'
                     : 'text-zinc-300 hover:text-white'
                 }`}
+                title="Ajustar à Altura da tela"
               >
                 Altura
               </button>
               <button
-                onClick={() => setFitMode('fit-width')}
-                className={`px-2.5 py-1 rounded-md transition ${
+                onClick={() => {
+                  setFitMode('fit-width');
+                  resetZoom();
+                }}
+                className={`px-2 py-1 rounded-md transition ${
                   fitMode === 'fit-width'
                     ? 'bg-amber-500 text-zinc-950 font-semibold'
                     : 'text-zinc-300 hover:text-white'
                 }`}
+                title="Ajustar à Largura da tela"
               >
                 Largura
-              </button>
-              <button
-                onClick={() => setFitMode('original')}
-                className={`px-2.5 py-1 rounded-md transition ${
-                  fitMode === 'original'
-                    ? 'bg-amber-500 text-zinc-950 font-semibold'
-                    : 'text-zinc-300 hover:text-white'
-                }`}
-              >
-                100%
               </button>
             </div>
 
             {indexSummary.comicInfo && (
               <button
                 onClick={() => setShowMetaModal(true)}
-                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs text-zinc-200 border border-zinc-700"
+                className="inline-flex items-center gap-1 p-1.5 sm:px-2 sm:py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs text-zinc-200 border border-zinc-700"
                 title="Ver ComicInfo.xml"
               >
                 <Info className="w-3.5 h-3.5 text-sky-400" />
-                ComicInfo.xml
+                <span className="hidden lg:inline">Info</span>
               </button>
             )}
 
+            {/* Botão SUTIL do HUD de Telemetria da Janela Deslizante */}
             <button
               onClick={() => setShowHud((h) => !h)}
-              className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition ${
+              className={`p-1.5 sm:px-2 sm:py-1.5 rounded-lg text-xs font-mono transition border ${
                 showHud
                   ? 'bg-sky-500/20 text-sky-200 border-sky-500/40'
-                  : 'bg-zinc-800 text-zinc-300 border-zinc-700 hover:bg-zinc-700'
+                  : 'bg-zinc-800/80 text-zinc-400 border-zinc-700/70 hover:text-zinc-200 hover:bg-zinc-700'
               }`}
-              title="Mostrar/Ocultar Monitor da Janela Deslizante (Atalho: I)"
+              title="Alternar HUD da Janela Deslizante [N-1..N+3] (Atalho: I)"
             >
-              <Cpu className="w-3.5 h-3.5" />
-              HUD [N-1..N+3]
+              <Cpu className="w-3.5 h-3.5 inline mr-1 text-sky-400" />
+              <span className="text-[11px]">HUD</span>
             </button>
 
             <button
@@ -383,9 +542,9 @@ export const CbzReaderView: React.FC<CbzReaderViewProps> = ({
               title="Tela Cheia (Atalho: F)"
             >
               {isFullscreen ? (
-                <Minimize2 className="w-4 h-4" />
+                <Minimize2 className="w-3.5 h-3.5" />
               ) : (
-                <Maximize2 className="w-4 h-4" />
+                <Maximize2 className="w-3.5 h-3.5" />
               )}
             </button>
           </div>
@@ -398,12 +557,12 @@ export const CbzReaderView: React.FC<CbzReaderViewProps> = ({
           <div
             className={`max-w-2xl w-full rounded-2xl border-2 border-dashed p-8 sm:p-10 text-center transition ${
               isDraggingOver
-                ? 'border-amber-400 bg-amber-500/10'
+                ? 'border-rose-400 bg-rose-500/10'
                 : 'border-zinc-800 bg-zinc-900/50 hover:border-zinc-700'
             }`}
           >
-            <div className="w-16 h-16 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center mx-auto mb-5">
-              <BookOpen className="w-8 h-8 text-amber-400" />
+            <div className="w-16 h-16 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center mx-auto mb-5">
+              <BookOpen className="w-8 h-8 text-rose-400" />
             </div>
 
             <h2 className="text-2xl font-bold text-zinc-100 mb-2 flex items-center justify-center gap-2">
@@ -429,7 +588,7 @@ export const CbzReaderView: React.FC<CbzReaderViewProps> = ({
               <button
                 onClick={() => fileInputRef.current?.click()}
                 disabled={isLoadingFile}
-                className="inline-flex items-center gap-2 px-5 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold text-sm shadow-lg shadow-amber-500/20 transition cursor-pointer"
+                className="inline-flex items-center gap-2 px-5 py-3 rounded-xl bg-rose-500 hover:bg-rose-400 text-white font-semibold text-sm shadow-lg shadow-rose-500/20 transition cursor-pointer"
               >
                 <FileArchive className="w-4 h-4" />
                 Selecionar Arquivo .CBZ
@@ -451,7 +610,7 @@ export const CbzReaderView: React.FC<CbzReaderViewProps> = ({
                 className="inline-flex items-center gap-2 px-4 py-3 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-300 text-sm border border-zinc-800 transition cursor-pointer"
               >
                 <FolderPlus className="w-4 h-4 text-sky-400" />
-                Criar um .CBZ no Maker
+                Ir para o Converter / Maker
               </button>
             </div>
 
@@ -473,9 +632,9 @@ export const CbzReaderView: React.FC<CbzReaderViewProps> = ({
               <div className="p-3 rounded-xl bg-zinc-900/90 border border-zinc-800">
                 <div className="font-semibold text-zinc-200 mb-1 flex items-center gap-1.5">
                   <Trash2 className="w-3.5 h-3.5 text-rose-400" />
-                  AbortController Ativo
+                  Pinch &amp; Mouse Zoom
                 </div>
-                Cancela extrações pendentes caso você pule várias páginas de uma vez.
+                Gesto de pinça no celular, scroll no PC e arrasto fluído de tela.
               </div>
             </div>
           </div>
@@ -485,49 +644,122 @@ export const CbzReaderView: React.FC<CbzReaderViewProps> = ({
       {/* Área Principal de Visualização + HUD da Janela Deslizante */}
       {indexSummary && snapshot && (
         <div className="flex-1 flex flex-col lg:flex-row relative overflow-hidden">
-          {/* Viewport da Página */}
-          <div className="flex-1 relative flex items-center justify-center bg-zinc-950 overflow-auto select-none min-h-[70vh]">
-            {/* Zona de Clique Borda Esquerda */}
+          {/* Viewport da Página com Suporte a Zoom e Pan */}
+          <div
+            onWheel={handleWheelZoom}
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={handleMouseUp}
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
+            className={`flex-1 relative flex items-center justify-center bg-zinc-950 overflow-hidden select-none min-h-[70vh] ${
+              zoomLevel > 1 ? (isPanning ? 'cursor-grabbing' : 'cursor-grab') : 'cursor-default'
+            }`}
+          >
+            {/* Zona de Clique Borda Esquerda (só atua sem zoom) */}
             <button
               type="button"
               onClick={handleLeftEdgeAction}
               aria-label="Borda esquerda de navegação"
-              className="fixed lg:absolute left-0 top-14 bottom-16 w-1/5 max-w-[160px] z-10 group flex items-center justify-start pl-3 focus:outline-none cursor-pointer"
+              className={`fixed lg:absolute left-0 top-14 bottom-16 w-1/5 max-w-[140px] z-10 group flex items-center justify-start pl-3 focus:outline-none ${
+                zoomLevel > 1 ? 'pointer-events-none' : 'cursor-pointer'
+              }`}
             >
               <span className="p-2.5 rounded-full bg-zinc-900/80 border border-zinc-700 text-zinc-200 opacity-0 group-hover:opacity-100 transition shadow-lg">
                 <ChevronLeft className="w-6 h-6" />
               </span>
             </button>
 
-            {/* Zona de Clique Borda Direita */}
+            {/* Zona de Clique Borda Direita (só atua sem zoom) */}
             <button
               type="button"
               onClick={handleRightEdgeAction}
               aria-label="Borda direita de navegação"
-              className="fixed lg:absolute right-0 top-14 bottom-16 w-1/5 max-w-[160px] z-10 group flex items-center justify-end pr-3 focus:outline-none cursor-pointer"
+              className={`fixed lg:absolute right-0 top-14 bottom-16 w-1/5 max-w-[140px] z-10 group flex items-center justify-end pr-3 focus:outline-none ${
+                zoomLevel > 1 ? 'pointer-events-none' : 'cursor-pointer'
+              }`}
             >
               <span className="p-2.5 rounded-full bg-zinc-900/80 border border-zinc-700 text-zinc-200 opacity-0 group-hover:opacity-100 transition shadow-lg">
                 <ChevronRight className="w-6 h-6" />
               </span>
             </button>
 
-            {/* Imagem Decodificada da Página Atual N */}
-            {snapshot.currentReadyPage ? (
-              <img
-                key={snapshot.currentReadyPage.objectUrl}
-                src={snapshot.currentReadyPage.objectUrl}
-                alt={`Página ${snapshot.currentPage + 1}`}
-                className={`transition-opacity duration-150 shadow-2xl ${
-                  fitMode === 'fit-height'
-                    ? 'max-h-[calc(100vh-9.5rem)] w-auto object-contain'
-                    : fitMode === 'fit-width'
-                    ? 'w-full max-w-4xl h-auto object-contain'
-                    : 'max-w-none'
+            {/* Barrinha Flutuante de Zoom */}
+            <div className="absolute top-4 right-4 z-20 flex items-center gap-1.5 bg-zinc-900/85 backdrop-blur-md border border-zinc-700/80 px-2.5 py-1.5 rounded-xl text-xs font-mono shadow-xl">
+              <button
+                onClick={() =>
+                  setZoomLevel((z) => {
+                    const next = Math.max(1, Number((z - 0.25).toFixed(2)));
+                    if (next === 1) setPanOffset({ x: 0, y: 0 });
+                    return next;
+                  })
+                }
+                disabled={zoomLevel <= 1}
+                className="p-1 rounded-md hover:bg-zinc-800 disabled:opacity-40 text-zinc-300"
+                title="Diminuir Zoom (-)"
+              >
+                <ZoomOut className="w-3.5 h-3.5" />
+              </button>
+
+              <span
+                className={`min-w-[44px] text-center font-bold ${
+                  zoomLevel > 1 ? 'text-amber-400' : 'text-zinc-400'
                 }`}
-              />
+              >
+                {Math.round(zoomLevel * 100)}%
+              </span>
+
+              <button
+                onClick={() =>
+                  setZoomLevel((z) => Math.min(3.5, Number((z + 0.25).toFixed(2))))
+                }
+                disabled={zoomLevel >= 3.5}
+                className="p-1 rounded-md hover:bg-zinc-800 disabled:opacity-40 text-zinc-300"
+                title="Aumentar Zoom (+)"
+              >
+                <ZoomIn className="w-3.5 h-3.5" />
+              </button>
+
+              {zoomLevel > 1 && (
+                <button
+                  onClick={resetZoom}
+                  className="ml-1 p-1 rounded-md hover:bg-rose-500/20 text-rose-300 border border-rose-500/30"
+                  title="Resetar Zoom (0 ou Duplo Toque)"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+
+            {/* Imagem Decodificada da Página Atual N com Transform de Zoom & Pan */}
+            {snapshot.currentReadyPage ? (
+              <div
+                style={{
+                  transform: `translate3d(${panOffset.x}px, ${panOffset.y}px, 0) scale(${zoomLevel})`,
+                  transformOrigin: 'center center',
+                  transition: isPanning ? 'none' : 'transform 120ms ease-out',
+                }}
+                className="flex items-center justify-center will-change-transform"
+              >
+                <img
+                  key={snapshot.currentReadyPage.objectUrl}
+                  src={snapshot.currentReadyPage.objectUrl}
+                  alt={`Página ${snapshot.currentPage + 1}`}
+                  draggable={false}
+                  className={`shadow-2xl pointer-events-none select-none ${
+                    fitMode === 'fit-height'
+                      ? 'max-h-[calc(100vh-9.5rem)] w-auto object-contain'
+                      : fitMode === 'fit-width'
+                      ? 'w-full max-w-4xl h-auto object-contain'
+                      : 'max-w-none'
+                  }`}
+                />
+              </div>
             ) : (
               <div className="flex flex-col items-center justify-center gap-3 text-zinc-400 py-24">
-                <div className="w-10 h-10 rounded-full border-2 border-amber-400 border-t-transparent animate-spin" />
+                <div className="w-10 h-10 rounded-full border-2 border-rose-400 border-t-transparent animate-spin" />
                 <span className="text-xs font-mono">
                   Extraindo slice do ZIP &amp; decodificando página{' '}
                   {snapshot.currentPage + 1}...
@@ -582,7 +814,7 @@ export const CbzReaderView: React.FC<CbzReaderViewProps> = ({
                         slot.state !== 'out-of-bounds' ? 'cursor-pointer' : 'opacity-45'
                       } ${
                         isCurrent
-                          ? 'bg-amber-500/15 border-amber-500/50 text-amber-100'
+                          ? 'bg-rose-500/15 border-rose-500/50 text-rose-100'
                           : slot.state === 'ready'
                           ? 'bg-emerald-500/10 border-emerald-500/30 text-zinc-200 hover:bg-emerald-500/15'
                           : slot.state === 'loading'
@@ -659,7 +891,7 @@ export const CbzReaderView: React.FC<CbzReaderViewProps> = ({
               {/* Inspecionador da Chave da Transformada de Schwartz */}
               {currentPageEntry?.schwartzKey && (
                 <div className="p-3 rounded-xl bg-zinc-950 border border-zinc-800 text-xs space-y-1.5">
-                  <div className="font-semibold text-amber-400 flex items-center justify-between">
+                  <div className="font-semibold text-rose-300 flex items-center justify-between">
                     <span>Chave de Schwartz (Página Atual)</span>
                     <span className="text-[10px] font-mono text-zinc-400">
                       O(N) Key Extraction
@@ -689,11 +921,13 @@ export const CbzReaderView: React.FC<CbzReaderViewProps> = ({
                   Atalhos de Navegação:
                 </div>
                 <div className="grid grid-cols-2 gap-1 font-mono">
+                  <span>Esc: Fechar / Reset</span>
+                  <span>Scroll: Zoom</span>
                   <span>← / → ou A / D: Virar</span>
                   <span>Espaço: Próxima</span>
                   <span>M: Alternar RTL/LTR</span>
-                  <span>V: Ajuste Largura/Altura</span>
-                  <span>I: Ocultar HUD</span>
+                  <span>V: Altura/Largura</span>
+                  <span>I: Alternar HUD</span>
                   <span>F: Tela Cheia</span>
                 </div>
               </div>
@@ -704,7 +938,7 @@ export const CbzReaderView: React.FC<CbzReaderViewProps> = ({
 
       {/* Barra Inferior de Progresso Interativa (Scrubber) */}
       {indexSummary && snapshot && (
-        <div className="bg-zinc-900/95 border-t border-zinc-800 px-4 py-3 flex items-center gap-4 z-20">
+        <div className="bg-zinc-900/95 border-t border-zinc-800 px-4 py-2.5 flex items-center gap-4 z-20">
           <button
             onClick={handleLeftEdgeAction}
             className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700"
@@ -714,7 +948,7 @@ export const CbzReaderView: React.FC<CbzReaderViewProps> = ({
           </button>
 
           <div className="flex-1 flex items-center gap-3">
-            <span className="text-xs font-mono text-amber-400 font-semibold min-w-[76px]">
+            <span className="text-xs font-mono text-rose-300 font-semibold min-w-[76px]">
               Pág {snapshot.currentPage + 1} / {snapshot.totalPages}
             </span>
 
@@ -723,8 +957,8 @@ export const CbzReaderView: React.FC<CbzReaderViewProps> = ({
               min={0}
               max={Math.max(0, snapshot.totalPages - 1)}
               value={snapshot.currentPage}
-              onChange={(e) => goToPage( parseInt(e.target.value, 10) )}
-              className={`flex-1 accent-amber-500 h-2 bg-zinc-800 rounded-lg cursor-pointer ${
+              onChange={(e) => goToPage(parseInt(e.target.value, 10))}
+              className={`flex-1 accent-rose-500 h-2 bg-zinc-800 rounded-lg cursor-pointer ${
                 direction === 'rtl' ? 'rotate-180' : ''
               }`}
             />
