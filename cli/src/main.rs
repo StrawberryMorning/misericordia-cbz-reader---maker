@@ -20,12 +20,12 @@ fn imprimir_ajuda() {
     println!("USO:");
     println!("  proselytize <COMANDO> [ARGUMENTOS]\n");
     println!("COMANDOS:");
-    println!("  read <arquivo.cbz> [--page <N>] [--width <COLUNAS>]");
-    println!("      Renderiza e lê o quadrinho diretamente DENTRO do terminal em");
-    println!("      TrueColor 24-bit ANSI (▀) com Janela Deslizante [N-1..N+3] ativa.\n");
+    println!("  read <arquivo.cbz> [--page <N>] [--ansi] [--width <COLUNAS>]");
+    println!("      Abre o quadrinho em uma JANELA PRÓPRIA de alta resolução (100% nítida,");
+    println!("      sem barras de navegador, com zoom no scroll, RTL e Janela Deslizante).");
+    println!("      Use --ansi para renderizar em blocos TrueColor dentro do terminal.\n");
     println!("  open <arquivo.cbz> [--port <PORTA>] [--no-browser]");
-    println!("      Sobe um servidor local instantâneo em Rust e abre o arquivo .cbz");
-    println!("      direto na interface visual do Proselytize Reader.\n");
+    println!("      Sobe um servidor local em Rust e abre o .cbz no navegador padrão.\n");
     println!("  unpack <arquivo.cbz> [-o <pasta_destino>] [--page <N>]");
     println!("      Extrai todas as páginas (ou apenas a página --page N) do .cbz");
     println!("      já ordenadas e padronizadas para uma pasta no disco.\n");
@@ -73,10 +73,11 @@ fn formatar_bytes(bytes: u64) -> String {
 fn executar_read(args: &[String]) -> Result<(), String> {
     let arquivo = args
         .first()
-        .ok_or_else(|| "Informe o arquivo .cbz. Ex: proselytize read manga.cbz".to_string())?;
+        .ok_or_else(|| "Informe o arquivo .cbz. Ex: pro read manga.cbz".to_string())?;
 
     let mut pagina: Option<usize> = None;
     let mut largura: u32 = 64;
+    let mut modo_ansi = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -93,6 +94,9 @@ fn executar_read(args: &[String]) -> Result<(), String> {
                     largura = w_str.parse::<u32>().unwrap_or(64).clamp(24, 160);
                 }
             }
+            "--ansi" => {
+                modo_ansi = true;
+            }
             outro => {
                 return Err(format!("Argumento desconhecido em 'read': {}", outro));
             }
@@ -100,13 +104,17 @@ fn executar_read(args: &[String]) -> Result<(), String> {
         i += 1;
     }
 
-    executar_read_terminal(arquivo, pagina, largura)
+    if modo_ansi {
+        executar_read_terminal(arquivo, pagina, largura)
+    } else {
+        iniciar_servidor_visual_cbz(arquivo, None, true, true, pagina)
+    }
 }
 
 fn executar_open(args: &[String]) -> Result<(), String> {
     let arquivo = args
         .first()
-        .ok_or_else(|| "Informe o arquivo .cbz. Ex: proselytize open manga.cbz".to_string())?;
+        .ok_or_else(|| "Informe o arquivo .cbz. Ex: pro open manga.cbz".to_string())?;
 
     let mut porta: Option<u16> = None;
     let mut abrir_navegador = true;
@@ -130,7 +138,7 @@ fn executar_open(args: &[String]) -> Result<(), String> {
         i += 1;
     }
 
-    iniciar_servidor_visual_cbz(arquivo, porta, abrir_navegador)
+    iniciar_servidor_visual_cbz(arquivo, porta, abrir_navegador, false, None)
 }
 
 fn executar_unpack(args: &[String]) -> Result<(), String> {
